@@ -1,7 +1,5 @@
 package playground
 
-import api.{Discriminator, Hole}
-
 import scala.annotation.targetName
 
 final case class Person(firstName: String, lastName: String, city: String)

@@ -20,8 +20,8 @@ object BuilderGeneratorTest extends TestSuite {
       type I = NamedTuple[Tuple1["i"], Tuple1[Int]]
       type B = NamedTuple[Tuple1["b"], Tuple1[Boolean]]
 
-      // summon[NamedTuple[Tuple1["b"], Tuple1[Boolean => NamedTuple[Tuple1["i"], Int => IntAndBoolean]]] =:=
-      //   BuilderGenerator.BuilderForRev[NamedTuple[Tuple1["i"], Tuple1[Int]], B, IntAndBoolean]]
+       summon[NamedTuple[Tuple1["b"], Tuple1[Boolean => NamedTuple[Tuple1["i"], Tuple1[Int => IntAndBoolean]]]] =:=
+         BuilderGeneratorSimplest.BuilderFor[B, NamedTuple[Tuple1["i"], Tuple1[Int]], IntAndBoolean]]
     }
     test("IntAndBoolean") {
       import models.IntAndBoolean
@@ -30,7 +30,8 @@ object BuilderGeneratorTest extends TestSuite {
 
     test("triple") {
       import models.Triple
-      assert(Triple(1, "s", None) == Triple.a(1).s("s").c(None))
+      val partial = Triple.a(1).s("s")
+      assert(Triple(1, "s", None) == partial.c(None))
     }
   }
 

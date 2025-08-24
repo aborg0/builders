@@ -13,3 +13,8 @@ lazy val root = (project in file("."))
 
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
+
+lazy val docs = project       // new documentation project
+  .in(file("builders_docs")) // important: it must not be docs/
+  .dependsOn(root)
+  .enablePlugins(MdocPlugin)

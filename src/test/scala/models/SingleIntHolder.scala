@@ -1,10 +1,10 @@
 package models
 
-import api.{BuilderGenerator, BuilderMap, BuilderTypeClass}
+import api.BuilderGeneratorSimplest.caseclass1
+import api.{BuilderGeneratorSimplest, BuilderTypeClass}
 
 final case class SingleIntHolder(i: Int)
 
-import api.BuilderGenerator.given
+import api.BuilderGeneratorSimplest.given
 
-object SingleIntHolder extends BuilderGenerator[SingleIntHolder](using BuilderTypeClass(SingleIntHolder.apply))
-//(summon[BuilderTypeClass[SingleIntHolder]])//(BuilderMap(Map("i" -> ((i: Int) => SingleIntHolder(i)))))
+object SingleIntHolder extends BuilderGeneratorSimplest[SingleIntHolder](using BuilderTypeClass[SingleIntHolder](caseclass1(SingleIntHolder.apply)))
