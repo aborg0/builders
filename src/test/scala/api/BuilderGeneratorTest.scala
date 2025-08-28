@@ -4,7 +4,7 @@ import utest.TestSuite
 
 object BuilderGeneratorTest extends TestSuite {
 
-  import utest.{Tests, test}
+  import utest.{Tests, assertThrows, test}
 
   val tests = Tests{
     test("SingleIntHolder") {
@@ -26,6 +26,20 @@ object BuilderGeneratorTest extends TestSuite {
     test("IntAndBoolean") {
       import models.IntAndBoolean
       assert(IntAndBoolean(43, false) == IntAndBoolean.i(43).b(false))
+    }
+//    test("IntAndBooleanNonNull first") {
+//      import models.IntAndBoolean
+//      import models.IntAndBooleanNonNull
+//      assertThrows[IllegalArgumentException] {
+//        IntAndBooleanNonNull.i(43).b(null: Boolean | Null)
+//      }
+//    }
+    test("IntAndBooleanNonNull second") {
+      import models.IntAndBoolean
+      import models.IntAndBooleanNonNull
+      assertThrows[IllegalArgumentException] {
+        IntAndBooleanNonNull.i(null: Int | Null)
+      }
     }
 
     test("triple") {
