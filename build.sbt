@@ -23,3 +23,18 @@ lazy val docs = project       // new documentation project
   .in(file("builders_docs")) // important: it must not be docs/
   .dependsOn(root)
   .enablePlugins(MdocPlugin)
+
+lazy val withPrelude = project
+  .in(file("with_zio_prelude"))
+  .settings(
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-prelude" % "1.0.0-RC42",
+    ),
+  )
+  .dependsOn(root)
+
+lazy val removeFix = project
+  .in(file("remove_fix"))
+  .settings(
+
+  )
