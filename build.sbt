@@ -1,15 +1,20 @@
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
-ThisBuild / scalaVersion := "3.7.2"
+ThisBuild / scalaVersion := "3.7.4"
 
 lazy val root = (project in file("."))
   .settings(
     name := "builders",
     scalacOptions ++= Seq(
       "-Xprint-inline",
-      "-Xmax-inlines", "1000"
+      "-Xmax-inlines", "1000",
+//      "-P:hearth.cross-quotes:logging=true",
     ),
-    libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.1" % "test", // Scala-JVM
+    libraryDependencies ++= Seq(
+      "com.kubuszok" %% "hearth" % "0.1.0",
+      //compilerPlugin(("com.kubuszok" % "hearth" % "0.1.0").cross(CrossVersion.Patch)),
+      "com.lihaoyi" %% "utest" % "0.9.1" % "test", // Scala-JVM
+    ),
 
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
