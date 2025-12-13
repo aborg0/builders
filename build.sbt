@@ -11,7 +11,7 @@ lazy val root = (project in file("."))
 //      "-P:hearth.cross-quotes:logging=true",
     ),
     libraryDependencies ++= Seq(
-      "com.kubuszok" %% "hearth" % "0.1.0",
+      "com.kubuszok" %% "hearth" % "0.2.0",
       //compilerPlugin(("com.kubuszok" % "hearth" % "0.1.0").cross(CrossVersion.Patch)),
       "com.lihaoyi" %% "utest" % "0.9.1" % "test", // Scala-JVM
     ),

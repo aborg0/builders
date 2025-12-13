@@ -7,5 +7,5 @@ case class IntAndBoolean(i: Int, b: Boolean)
 
 import api.BuilderGeneratorSimplest.given
 
-object IntAndBoolean extends BuilderGeneratorSimplest[IntAndBoolean](using BuilderTypeClass(caseclass2(IntAndBoolean.apply)))
+object IntAndBoolean extends BuilderGeneratorSimplest[IntAndBoolean]
 
