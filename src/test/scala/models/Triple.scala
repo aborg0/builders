@@ -1,7 +1,5 @@
 package models
 
-import api.BuilderGeneratorSimplest.caseclass3
-
 final case class Triple(a: Int, s: String, c: Option[String])
 
 import api.*

@@ -1,6 +1,5 @@
 package models
 
-import api.BuilderGeneratorSimplest.caseclass2
 import api.{BuilderGeneratorSimplest, BuilderTypeClass}
 
 case class IntAndBoolean(i: Int, b: Boolean)

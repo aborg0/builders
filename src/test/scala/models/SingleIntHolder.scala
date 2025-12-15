@@ -1,6 +1,5 @@
 package models
 
-import api.BuilderGeneratorSimplest.caseclass1
 import api.{BuilderGeneratorSimplest, BuilderTypeClass}
 
 final case class SingleIntHolder(i: Int)
