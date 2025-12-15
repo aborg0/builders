@@ -33,6 +33,14 @@ object BuilderGeneratorTest extends TestSuite {
       val partial = Triple.a(1).s("s")
       assert(Triple(1, "s", None) == partial.c(None))
     }
+
+    // TODO enable after fixing the apply does not take type parameters issue
+    // test("holder") {
+    //   import models.{Holder, HolderBuilder}
+    //   // import models.HolderBuilder.*
+    //   val builder = new HolderBuilder[String]
+    //   assert(Holder[String]("hold") == new HolderBuilder[String].value("hold"))
+    // }
   }
 
 }
