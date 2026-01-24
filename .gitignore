@@ -49,3 +49,4 @@ build/
 **/project/metals.sbt
 **/.metals/
 **/.bloop/
+/.continue/mcpServers/new-mcp-server.yaml
