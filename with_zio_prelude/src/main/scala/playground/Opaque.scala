@@ -13,11 +13,28 @@ object Opaque {
   object ValidOp {
 
     import zio.prelude.Validation
+    import zio.prelude.ZValidation
 
-    def apply(s: String): Validation[String, ValidOp] =
+    def apply(s: String): ZValidation[Nothing, String, ValidOp] =
       s match {
         case "Op" => Validation.succeed(s: ValidOp)
         case _ => Validation.fail(s"'$s' is not Op.")
       }
   }
+
+  import zio.prelude.{Subtype, Validation}
+  import zio.prelude.Assertion._
+
+  object SequenceNumber extends Subtype[Int] {
+
+    // // Scala 2
+    // override def assertion = assert { 
+    //   greaterThanOrEqualTo(0)
+    // }
+    
+    // Scala 3
+    override inline def assertion = 
+      greaterThanOrEqualTo{0}
+  }
+  type SequenceNumber = SequenceNumber.Type
 }

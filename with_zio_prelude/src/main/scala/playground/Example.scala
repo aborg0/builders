@@ -2,8 +2,8 @@ package playground
 
 object Example {
   def main(args: Array[String]): Unit = {
-    println(TripleO().i(3).op("Op").v("Op"))
-    println(TripleO().i(4).op("JOp").v("NonOp"))
+    println(TripleValO().i(3).op("Op").v("Op").s(2))
+    println(TripleValVal().i(4).op("JOp").v("NonOp").s(-2))
   }
 
 }
