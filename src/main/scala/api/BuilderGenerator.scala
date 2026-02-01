@@ -1,123 +1,133 @@
 package api
 
 // Based on https://blog.daniel-beskin.com/2025-04-14-whiteboxish-named-tuples
-trait BuilderGeneratorSimplest[T](using tc: BuilderTypeClass[T]) extends Selectable {
+trait BuilderGeneratorSimplest[T](using val tc: BuilderTypeClass[T]) {
   import BuilderGeneratorSimplest.*
 
-  import scala.NamedTuple.Split
+  type Fields = Builder[T]
 
-  type Fields = BuilderFor[Tuple.Head[Split[Tup[T], 1]], Tuple.Last[Split[Tup[T], 1]], T]
-  inline def selectDynamic(name: String): Any =
-    tc.builder
+  /**
+   * Entry point for the macro-generated builder.
+   * IntAndBoolean.builder.i(42).b(false)
+   */
+  def builder: Builder[T] = tc.builder
 }
 
-import scala.NamedTuple.Map
 
 object BuilderGeneratorSimplest {
-  import NamedTuple.*
+  import scala.NamedTuple
+  import scala.NamedTuple.*
+  import scala.NamedTuple.Split
+
   type Tup[T] = NamedTuple.From[T]
+
+  /**
+   * Builder named-tuple type for a case class T.
+   */
+  type Builder[T] = BuilderFor[Tuple.Head[Split[Tup[T], 1]], Tuple.Last[Split[Tup[T], 1]], T]
+
 
   type BuilderFor[H <: AnyNamedTuple, R <: AnyNamedTuple, T] <: AnyNamedTuple =
     NamedTuple.DropNames[R] match {
       case EmptyTuple =>
-      NamedTuple[NamedTuple.Names[H], Tuple1[Tuple.Head[NamedTuple.DropNames[H]] => T]]
+        NamedTuple[NamedTuple.Names[H], Tuple1[Tuple.Head[NamedTuple.DropNames[H]] => T]]
       case h *: t =>
-      NamedTuple[NamedTuple.Names[H], Tuple1[Tuple.Head[NamedTuple.DropNames[H]] =>
-        BuilderFor[Tuple.Head[Split[R, 1]], Tuple.Last[Split[R, 1]], T]]]
-
+        NamedTuple[NamedTuple.Names[H], Tuple1[Tuple.Head[NamedTuple.DropNames[H]] =>
+          BuilderFor[Tuple.Head[Split[R, 1]], Tuple.Last[Split[R, 1]], T]]]
     }
+
 
   import scala.quoted.*
 
-  inline given build[T]: BuilderTypeClass[T] = {
-/*    BuilderTypeClass(*/${ buildImpl[T] }/* match {
-      case func1: Function1[?, ?] => caseclass1(func1)
-      case func2: Function2[?, ?, ?] => caseclass2(func2)
-      case func3: Function3[?, ?, ?, ?] => caseclass3(func3)
-      case func4: Function4[?, ?, ?, ?, ?] => caseclass4(func4)
-    })*/
-  }
+  inline given build[T]: BuilderTypeClass[T] = ${ buildImpl[T] }
 
-
-// Claude 4
   def buildImpl[T: Type](using Quotes): Expr[BuilderTypeClass[T]] = {
     import quotes.reflect.*
 
-    val companionSymbol = TypeRepr.of[T].typeSymbol.companionModule
-    val meth = companionSymbol.declaredMethods.find(_.name == "apply").get
+    val tpe = TypeRepr.of[T]
+    val companionSymbol = tpe.typeSymbol.companionModule
+    if !companionSymbol.exists then
+      report.errorAndAbort(s"No companion object found for ${tpe.show}")
 
-    // Get the companion object instance
+    val applyMethod =
+      companionSymbol.declaredMethods.find(_.name == "apply").getOrElse {
+        report.errorAndAbort(s"No apply method found on companion of ${tpe.show}")
+      }
+
     val companion = Ref(companionSymbol)
+    val applyTerm = companion.select(applyMethod)
+    val methType = applyTerm.tpe.widen
 
-    val applySymbol = companion.select(meth)
-    // Get the full method type
-    val methType = applySymbol.tpe.widen
-
-    // Handle methods with any number of parameter lists
-    def etaExpand(prefix: Term, tpe: TypeRepr): Term = {
+    def etaExpand(prefix: Term, tpe: TypeRepr): Term =
       tpe match {
         case MethodType(paramNames, paramTypes, returnType) =>
-          // Create lambda for this parameter list
           Lambda(
             owner = Symbol.spliceOwner,
             tpe = MethodType(paramNames)(_ => paramTypes, _ => returnType),
-            rhsFn = (sym, args) => {
-              // Convert List[Tree] to List[Term]
-              val termArgs = args/* .flatten */.map(_.asInstanceOf[Term])
-              val applied = prefix.appliedToArgs(termArgs)
+            rhsFn = (_, args) => {
+              val termArgs = args.map(_.asInstanceOf[Term])
+              val applied   = prefix.appliedToArgs(termArgs)
               returnType match {
-                case mt: MethodType =>
-                  // More parameter lists to go
-                  etaExpand(applied, mt)
-                case _ =>
-                  // No more parameter lists
-                  applied
+                case mt: MethodType => etaExpand(applied, mt)
+                case _              => applied
               }
             }
           )
 
-        case PolyType(paramNames, paramTypes, returnType) =>
-          // Skip type parameters and continue with the return type
+        case PolyType(_, _, returnType) =>
           etaExpand(prefix, returnType)
 
         case _ =>
-          // No parameters left
           prefix
       }
-    }
 
-    // Start eta expansion
-    val etaExpanded = etaExpand(applySymbol, methType)
+    val etaExpanded = etaExpand(applyTerm, methType)
 
-//    etaExpanded.asExprOf[Any /* Function2[?, ?, ?] */]
-    val result = etaExpanded.asExprOf[Any]
+    val arity: Int =
+      methType match {
+        case mt: MethodType => mt.paramTypes.length
+        case _              => 0
+      }
 
-    methType match {
-      case MethodType(paramNames, _, _) if paramNames.length > 0 =>
-        // Use a runtime call to curried
+    type TupT   = Tup[T]
+    type NamesT = NamedTuple.Names[TupT]
+
+    arity match {
+      case 1 =>
         '{
-          BuilderTypeClass[T]($result match {
-            case f: Function1[?, ?] => caseclass1(f)
-            case f: Function2[?, ?, ?] => caseclass2(f)
-            case f: Function3[?, ?, ?, ?] => caseclass3(f)
-            case f: Function4[?, ?, ?, ?, ?] => caseclass4(f)
-            // Add more cases as needed
-//            case other => other
-          }
-          )
+          val f = ${ etaExpanded.asExpr/* Of[Any => T] */ }.asInstanceOf[Function1[?, T]]
+          val nt = Tuple1(f)
+          BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
         }
-//      case _ =>
-//        result
-    }
 
-    // https://eed3si9n.com/intro-to-scala-3-macros/#apply
-    // Select.unique(etaExpanded, "curried").appliedToNone.asExprOf[Function1[?, ?]]
+      case 2 =>
+        '{
+          val f2 = ${ etaExpanded.asExpr/* Of[(Any, Any) => T] */ }.asInstanceOf[Function2[?, ?, T]]
+          val chain = caseclass2(f2)
+          val nt = Tuple1(chain)
+          BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
+        }
+
+      case 3 =>
+        '{
+          val f3 = ${ etaExpanded.asExpr/* Of[(Any, Any, Any) => T] */ }.asInstanceOf[Function3[?, ?, ?, T]]
+          val chain = caseclass3(f3)
+          val nt = Tuple1(chain)
+          BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
+        }
+
+      case n =>
+        report.errorAndAbort(
+          s"Unsupported arity $n for ${tpe.show}. Extend buildImpl / caseclassN handling."
+        )
+    }
   }
+
 
 
   def caseclass1[T, T0](transform: T0 => T): T0 => T = transform
 //  def caseclass2[T, T0, T1](transform: (T0, T1) => T) = (a: T0) => Tuple1((b: T1) => transform.tupled)
-  def caseclass2[T, T0, T1](transform: (T0, T1) => T) = transform.curried.andThen(a => Tuple1(a))
+  def caseclass2[T, T0, T1](transform: (T0, T1) => T): T0 => Tuple1[T1 => T] = transform.curried.andThen(a => Tuple1(a))
   def caseclass3[T, T0, T1, T2](transform: (T0, T1, T2) => T) = transform.curried.andThen(t => Tuple1(t.andThen(Tuple1.apply)))
   def caseclass4[T, T0, T1, T2, T3](transform: (T0, T1, T2, T3) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
   def caseclass5[T, T0, T1, T2, T3, T4](transform: (T0, T1, T2, T3, T4) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))))

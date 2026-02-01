@@ -9,7 +9,8 @@ object BuilderGeneratorTest extends TestSuite {
   val tests = Tests{
     test("SingleIntHolder") {
       import models.SingleIntHolder
-      assert(SingleIntHolder(7) == SingleIntHolder.i(7))
+      assert(SingleIntHolder(7) == SingleIntHolder.builder.i(7))
+
     }
 
     test("Types") {
@@ -25,7 +26,8 @@ object BuilderGeneratorTest extends TestSuite {
     }
     test("IntAndBoolean") {
       import models.IntAndBoolean
-      assert(IntAndBoolean(43, false) == IntAndBoolean.i(43).b(false))
+      assert(IntAndBoolean(43, false) == IntAndBoolean.builder.i(43).b(false))
+
     }
 //    test("IntAndBooleanNonNull first") {
 //      import models.IntAndBoolean
@@ -38,14 +40,16 @@ object BuilderGeneratorTest extends TestSuite {
       import models.IntAndBoolean
       import models.IntAndBooleanNonNull
       assertThrows[IllegalArgumentException] {
-        IntAndBooleanNonNull.i(null: Int | Null)
+        IntAndBooleanNonNull.builder.i(null: Int | Null)
       }
+
     }
 
     test("triple") {
       import models.Triple
-      val partial = Triple.a(1).s("s")
+      val partial = Triple.builder.a(1).s("s")
       assert(Triple(1, "s", None) == partial.c(None))
+
     }
   }
 

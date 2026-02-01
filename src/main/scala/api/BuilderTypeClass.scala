@@ -1,3 +1,5 @@
 package api
 
-final case class BuilderTypeClass[S](builder: Function1[?, ?])
+import api.BuilderGeneratorSimplest.Builder
+
+final case class BuilderTypeClass[S](builder: Builder[S])
