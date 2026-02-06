@@ -13,7 +13,6 @@ trait BuilderGeneratorSimplest[T](using val tc: BuilderTypeClass[T]) {
   def builder: Builder[T] = tc.builder
 }
 
-
 object BuilderGeneratorSimplest {
   import scala.NamedTuple
   import scala.NamedTuple.*
@@ -24,94 +23,83 @@ object BuilderGeneratorSimplest {
   /**
    * Builder named-tuple type for a case class T.
    */
-  type Builder[T] = BuilderFor[Tuple.Head[Split[Tup[T], 1]], Tuple.Last[Split[Tup[T], 1]], T]
-
+  type Builder[T] = BuilderFor[
+    Tuple.Head[Split[Tup[T], 1]],
+    Tuple.Last[Split[Tup[T], 1]],
+    T
+  ]
 
   type BuilderFor[H <: AnyNamedTuple, R <: AnyNamedTuple, T] <: AnyNamedTuple =
     NamedTuple.DropNames[R] match {
       case EmptyTuple =>
         NamedTuple[NamedTuple.Names[H], Tuple1[Tuple.Head[NamedTuple.DropNames[H]] => T]]
       case h *: t =>
-        NamedTuple[NamedTuple.Names[H], Tuple1[Tuple.Head[NamedTuple.DropNames[H]] =>
-          BuilderFor[Tuple.Head[Split[R, 1]], Tuple.Last[Split[R, 1]], T]]]
+        NamedTuple[
+          NamedTuple.Names[H],
+          Tuple1[
+            Tuple.Head[NamedTuple.DropNames[H]] => BuilderFor[
+              Tuple.Head[Split[R, 1]],
+              Tuple.Last[Split[R, 1]],
+              T
+            ]
+          ]
+        ]
     }
 
-
   import scala.quoted.*
+  import scala.deriving.Mirror
+
+  // Helper to obtain a builder for any T (including generic T like Box[A])
+  def builderOf[T](using tc: BuilderTypeClass[T]): Builder[T] = tc.builder
 
   inline given build[T]: BuilderTypeClass[T] = ${ buildImpl[T] }
 
   def buildImpl[T: Type](using Quotes): Expr[BuilderTypeClass[T]] = {
     import quotes.reflect.*
 
-    val tpe = TypeRepr.of[T]
-    val companionSymbol = tpe.typeSymbol.companionModule
-    if !companionSymbol.exists then
-      report.errorAndAbort(s"No companion object found for ${tpe.show}")
+    val tpe        = TypeRepr.of[T]
+    val typeSymbol = tpe.typeSymbol
+  
+    // Determine arity from the primary constructor term parameters
+        val ctorSym         = typeSymbol.primaryConstructor
+    // For generic case classes, the first param list may be type params (non-term).
+    // Pick the first non-empty list of term params.
+    val termParamLists  = ctorSym.paramSymss.map(_.filter(_.isTerm)).filter(_.nonEmpty)
+    val arity: Int      = termParamLists.headOption.map(_.length).getOrElse {
+      report.errorAndAbort(s"Could not determine constructor arity for ${tpe.show}")
+    }
 
-    val applyMethod =
-      companionSymbol.declaredMethods.find(_.name == "apply").getOrElse {
-        report.errorAndAbort(s"No apply method found on companion of ${tpe.show}")
+
+    // Summon product mirror for T (case classes have these)
+    val mirrorProd: Expr[Mirror.ProductOf[T]] =
+      Expr.summon[Mirror.ProductOf[T]].getOrElse {
+        report.errorAndAbort(s"Could not summon Mirror.ProductOf for ${tpe.show}")
       }
-
-    val companion = Ref(companionSymbol)
-    val applyTerm = companion.select(applyMethod)
-    val methType = applyTerm.tpe.widen
-
-    def etaExpand(prefix: Term, tpe: TypeRepr): Term =
-      tpe match {
-        case MethodType(paramNames, paramTypes, returnType) =>
-          Lambda(
-            owner = Symbol.spliceOwner,
-            tpe = MethodType(paramNames)(_ => paramTypes, _ => returnType),
-            rhsFn = (_, args) => {
-              val termArgs = args.map(_.asInstanceOf[Term])
-              val applied   = prefix.appliedToArgs(termArgs)
-              returnType match {
-                case mt: MethodType => etaExpand(applied, mt)
-                case _              => applied
-              }
-            }
-          )
-
-        case PolyType(_, _, returnType) =>
-          etaExpand(prefix, returnType)
-
-        case _ =>
-          prefix
-      }
-
-    val etaExpanded = etaExpand(applyTerm, methType)
-
-    val arity: Int =
-      methType match {
-        case mt: MethodType => mt.paramTypes.length
-        case _              => 0
-      }
-
-    type TupT   = Tup[T]
-    type NamesT = NamedTuple.Names[TupT]
 
     arity match {
       case 1 =>
         '{
-          val f = ${ etaExpanded.asExpr/* Of[Any => T] */ }.asInstanceOf[Function1[?, T]]
+          val m = $mirrorProd
+          val f: Any => T = (a0: Any) => m.fromProduct(Tuple1(a0))
           val nt = Tuple1(f)
           BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
         }
 
       case 2 =>
         '{
-          val f2 = ${ etaExpanded.asExpr/* Of[(Any, Any) => T] */ }.asInstanceOf[Function2[?, ?, T]]
-          val chain = caseclass2(f2)
+          val m = $mirrorProd
+          val raw: (Any, Any) => T = (a0: Any, a1: Any) => m.fromProduct((a0, a1))
+          val chain = caseclass2(raw)
           val nt = Tuple1(chain)
           BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
         }
 
       case 3 =>
         '{
-          val f3 = ${ etaExpanded.asExpr/* Of[(Any, Any, Any) => T] */ }.asInstanceOf[Function3[?, ?, ?, T]]
-          val chain = caseclass3(f3)
+          val m = $mirrorProd
+          val raw: (Any, Any, Any) => T =
+            (a0: Any, a1: Any, a2: Any) => m.fromProduct((a0, a1, a2))
+          val chain = caseclass3(raw)
           val nt = Tuple1(chain)
           BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
         }
@@ -123,21 +111,62 @@ object BuilderGeneratorSimplest {
     }
   }
 
-
-
   def caseclass1[T, T0](transform: T0 => T): T0 => T = transform
-//  def caseclass2[T, T0, T1](transform: (T0, T1) => T) = (a: T0) => Tuple1((b: T1) => transform.tupled)
-  def caseclass2[T, T0, T1](transform: (T0, T1) => T): T0 => Tuple1[T1 => T] = transform.curried.andThen(a => Tuple1(a))
-  def caseclass3[T, T0, T1, T2](transform: (T0, T1, T2) => T) = transform.curried.andThen(t => Tuple1(t.andThen(Tuple1.apply)))
-  def caseclass4[T, T0, T1, T2, T3](transform: (T0, T1, T2, T3) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
-  def caseclass5[T, T0, T1, T2, T3, T4](transform: (T0, T1, T2, T3, T4) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))))
-  def caseclass6[T, T0, T1, T2, T3, T4, T5](transform: (T0, T1, T2, T3, T4, T5) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))))))
-  def caseclass7[T, T0, T1, T2, T3, T4, T5, T6](transform: (T0, T1, T2, T3, T4, T5, T6) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))))))))
-  def caseclass8[T, T0, T1, T2, T3, T4, T5, T6, T7](transform: (T0, T1, T2, T3, T4, T5, T6, T7) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))))))))))
-  def caseclass9[T, T0, T1, T2, T3, T4, T5, T6, T7, T8](transform: (T0, T1, T2, T3, T4, T5, T6, T7, T8) => T) = transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))))))))))))
 
-  private def nonNull[I] = (v: I) => {require(v != null); v}
-  def caseclass1NonNull[T, T0](transform: T0 => T): T0 => T = caseclass1(transform).compose(nonNull[T0])
-  def caseclass2NonNull[T, T0, T1](transform: (T0, T1) => T) = transform.curried.compose(nonNull[T0]).andThen(a => Tuple1(a.compose(nonNull[T1])))
-  def caseclass3NonNull[T, T0, T1, T2](transform: (T0, T1, T2) => T) = transform.curried.compose(nonNull[T0]).andThen(t => Tuple1(t.compose(nonNull[T1]).andThen(f => Tuple1(f.compose(nonNull[T2])))))
+  def caseclass2[T, T0, T1](transform: (T0, T1) => T): T0 => Tuple1[T1 => T] =
+    transform.curried.andThen(a => Tuple1(a))
+
+  def caseclass3[T, T0, T1, T2](transform: (T0, T1, T2) => T) =
+    transform.curried.andThen(t => Tuple1(t.andThen(Tuple1.apply)))
+
+  def caseclass4[T, T0, T1, T2, T3](transform: (T0, T1, T2, T3) => T) =
+    transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
+
+  def caseclass5[T, T0, T1, T2, T3, T4](transform: (T0, T1, T2, T3, T4) => T) =
+    transform.curried.andThen(t =>
+      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
+    ))
+
+  def caseclass6[T, T0, T1, T2, T3, T4, T5](transform: (T0, T1, T2, T3, T4, T5) => T) =
+    transform.curried.andThen(t =>
+      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
+        Tuple1(t.andThen(Tuple1.apply))
+      )))))
+    ))
+
+  def caseclass7[T, T0, T1, T2, T3, T4, T5, T6](transform: (T0, T1, T2, T3, T4, T5, T6) => T) =
+    transform.curried.andThen(t =>
+      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
+        Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply))))
+      )))))
+    ))
+
+  def caseclass8[T, T0, T1, T2, T3, T4, T5, T6, T7](transform: (T0, T1, T2, T3, T4, T5, T6, T7) => T) =
+    transform.curried.andThen(t =>
+      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
+        Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
+      )))))
+    )))
+
+  def caseclass9[T, T0, T1, T2, T3, T4, T5, T6, T7, T8](transform: (T0, T1, T2, T3, T4, T5, T6, T7, T8) => T) =
+    transform.curried.andThen(t =>
+      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
+        Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
+          Tuple1(t.andThen(Tuple1.apply))
+        )))))
+      )))))
+    )))
+
+  private def nonNull[I] = (v: I) => { require(v != null); v }
+
+  def caseclass1NonNull[T, T0](transform: T0 => T): T0 => T =
+    caseclass1(transform).compose(nonNull[T0])
+
+  def caseclass2NonNull[T, T0, T1](transform: (T0, T1) => T) =
+    transform.curried.compose(nonNull[T0]).andThen(a => Tuple1(a.compose(nonNull[T1])))
+
+  def caseclass3NonNull[T, T0, T1, T2](transform: (T0, T1, T2) => T) =
+    transform.curried.compose(nonNull[T0]).andThen(t =>
+      Tuple1(t.compose(nonNull[T1]).andThen(f => Tuple1(f.compose(nonNull[T2]))))
+    )
 }

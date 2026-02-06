@@ -51,6 +51,60 @@ object BuilderGeneratorTest extends TestSuite {
       assert(Triple(1, "s", None) == partial.c(None))
 
     }
+
+    test("generic Box[A] builder") {
+      import models.Box
+      import models.BoxBuilders
+      import api.BuilderGeneratorSimplest.given
+
+      val bi: Box[Int] = BoxBuilders.builder[Int].value(42)
+      val bs: Box[String] = BoxBuilders.builder[String].value("foo")
+
+      assert(bi == new Box(42))
+      assert(bs == new Box("foo"))
+    }
+    test("nested builders (Team/Person) – missing ergonomic support") {
+      import models.{Person, Team}
+
+      // Desired (not yet supported ergonomically):
+      //
+      val team =
+        Team.builder
+          .name("Scala Team")
+          .lead(
+            Person.builder
+              .name("Alice")
+              .age(30)
+          )
+          .members(List(
+            Person.builder.name("Bob").age(25),
+            Person.builder.name("Carol").age(27)
+          ))
+      //
+      // This would require additional builder combinators or
+      // extension methods that understand how to accept nested
+      // builders as arguments.
+
+      // What *is* supported today is using the inner builders
+      // to construct actual values, and then passing those values
+      // to the outer builder:
+
+      val lead: Person =
+        Person.builder.name("Alice").age(30)
+
+      val members: List[Person] = List(
+        Person.builder.name("Bob").age(25),
+        Person.builder.name("Carol").age(27)
+      )
+
+      // val team =
+      //   Team.builder
+      //     .name("Scala Team")
+      //     .lead(lead)
+      //     .members(members)
+
+      assert(team == Team("Scala Team", lead, members))
+    }
   }
 
 }
