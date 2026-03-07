@@ -85,7 +85,7 @@ object ValidatedBuilderGenerator {
    * using the primitive input types), so we let the inferred type come from the
    * macro result rather than coercing to the generic alias.
    */
-  inline def builder[T] = ${ ValidatedBuilderGenerator.builderImpl[T] }
+  transparent inline def builder[T] = ${ ValidatedBuilderGenerator.builderImpl[T] }
   
   
   /**

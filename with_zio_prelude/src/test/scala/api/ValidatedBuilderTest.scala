@@ -81,7 +81,7 @@ object ValidatedBuilderTest extends TestSuite {
 
     test("Simple builder compiles to expected curried shape") {
       val d      = LocalDate.of(2026, 1, 24)
-      val result = ValidatedBuilderGenerator.builder[Simple].asInstanceOf[ValidatedBuilder[Simple]].i(0).s("x").d(d)
+      val result = ValidatedBuilderGenerator.builder[Simple]._1(0)._1("x")._1(d)
       assert(result.isSuccess)
       val s = result.toEither.toOption.get
       assert(s.i == 0)
