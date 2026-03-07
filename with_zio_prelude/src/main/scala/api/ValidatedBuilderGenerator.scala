@@ -79,11 +79,8 @@ object ValidatedBuilderGenerator {
 
   /**
    * Returns the NamedTuple-based validated builder directly for `T`.
-   * Properly typed to support NamedTuple field access syntax.
-   *
-   * Note: this macro returns a concrete NamedTuple-typed expression (constructed
-   * using the primitive input types), so we let the inferred type come from the
-   * macro result rather than coercing to the generic alias.
+   * The precise named-tuple shape is supplied by the macro so callers can
+   * use field access like `.i(...).op(...)` without manual casts.
    */
   transparent inline def builder[T] = ${ ValidatedBuilderGenerator.builderImpl[T] }
   
@@ -288,10 +285,9 @@ object ValidatedBuilderGenerator {
                 '{
                   type PrimTypes = p0 *: EmptyTuple
                   type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                  ${ builderExpr }
-                    // .asInstanceOf[
-                    //   ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t]
-                    // ]
+                  ${ builderExpr }.asInstanceOf[
+                    ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t]
+                  ]
                 }
               case _ =>
                 report.errorAndAbort("Could not compute primitive type for field 0 when building builder for " + Type.show[t])
@@ -311,10 +307,9 @@ object ValidatedBuilderGenerator {
                 '{
                   type PrimTypes = p0 *: p1 *: EmptyTuple
                   type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                  ${ builderExpr }
-                    // .asInstanceOf[
-                    //   ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t]
-                    // ]
+                  ${ builderExpr }.asInstanceOf[
+                    ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t]
+                  ]
                 }
               case _ =>
                 report.errorAndAbort("Could not compute primitive types for fields 0,1 when building builder for " + Type.show[t])
@@ -338,10 +333,9 @@ object ValidatedBuilderGenerator {
                 '{
                   type PrimTypes = p0 *: p1 *: p2 *: EmptyTuple
                   type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                  ${ builderExpr }
-                    // .asInstanceOf[
-                    //   ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t]
-                    // ]
+                  ${ builderExpr }.asInstanceOf[
+                    ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t]
+                  ]
                 }
               case _ =>
                 report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when building builder for " + Type.show[t])

@@ -1,6 +1,6 @@
 package api
 
-import models.Simple
+import models.{Simple, SimpleValidated}
 import utest.*
 import playground.Opaque
 import zio.prelude.ZValidation
@@ -8,8 +8,6 @@ import zio.prelude.ZValidation
 import scala.reflect.Selectable.reflectiveSelectable
 import java.time.LocalDate
 import api.ValidatedBuilderGenerator.ValidatedBuilder
-
-import scala.NamedTuple.NamedTuple
 
 object ValidatedBuilderTest extends TestSuite {
 
@@ -31,44 +29,41 @@ object ValidatedBuilderTest extends TestSuite {
     }
     
     test("Simple case class with no validation") {
-      // val result  = ValidatedBuilderGenerator.builder[Simple].asInstanceOf[ValidatedBuilder[Simple]].i(2).s("@@").d(LocalDate.of(2026, 1, 24))
-      // assert(result.isSuccess)
+      val result: ZValidation[Nothing, String, Simple] =
+        ValidatedBuilderGenerator.builder[Simple].i(2).s("@@").d(LocalDate.of(2026, 1, 24))
+      assert(result.isSuccess)
+    }
+
+    test("SimpleValidated builder exposes named fields") {
+      val builder = SimpleValidated.validator
+      val afterI  = builder.i(42)
+      val result: ZValidation[Nothing, String, SimpleValidated] = afterI.op("Op")
+
+      assert(result.isSuccess)
+      val sv1 = result.toEither.toOption.get
+      assert(sv1.i == 42)
     }
     
     test("SimpleValidated with validation") {
-      import models.SimpleValidated
-      import zio.prelude.ZValidation
       val validator = SimpleValidated.validator
-      val result1 = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]]
-        .i(42)
-        .op("Op")
+      val result1 = validator.i(42).op("Op")
       assert(result1.isSuccess)
       val sv1 = result1.toEither.toOption.get
       assert(sv1.i == 42)
 
-      val result2 = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]].i(99).op("NotOp")
+      val result2 = validator.i(99).op("NotOp")
       assert(result2.isFailure)
     }
 
     test("SimpleValidated rejects empty op string") {
-      import models.SimpleValidated
-      import scala.reflect.Selectable.reflectiveSelectable
-      import zio.prelude.ZValidation
       val validator = SimpleValidated.validator
-      val result = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]].i(10).op("")
+      val result = validator.i(10).op("")
       assert(result.isFailure)
     }
 
     test("SimpleValidated preserves opaque value semantics") {
-      import models.SimpleValidated
-      import scala.reflect.Selectable.reflectiveSelectable
-      import zio.prelude.ZValidation
       val validator = SimpleValidated.validator
-      val result = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]].i(1).op("Op")
+      val result = validator.i(1).op("Op")
       assert(result.isSuccess)
 
       val sv = result.toEither.toOption.get
@@ -80,8 +75,9 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("Simple builder compiles to expected curried shape") {
-      val d      = LocalDate.of(2026, 1, 24)
-      val result = ValidatedBuilderGenerator.builder[Simple]._1(0)._1("x")._1(d)
+      val d = LocalDate.of(2026, 1, 24)
+      val result: ZValidation[Nothing, String, Simple] =
+        ValidatedBuilderGenerator.builder[Simple].i(0).s("x").d(d)
       assert(result.isSuccess)
       val s = result.toEither.toOption.get
       assert(s.i == 0)
@@ -90,12 +86,8 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("SimpleValidated builder returns ZValidation with String error type") {
-      import models.SimpleValidated
-      import scala.reflect.Selectable.reflectiveSelectable
-      import zio.prelude.ZValidation
       val validator = SimpleValidated.validator
-      val result = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]].i(123).op("NotOp")
+      val result: ZValidation[Nothing, String, SimpleValidated] = validator.i(123).op("NotOp")
 
       assert(result.isFailure)
 
@@ -104,13 +96,9 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("SimpleValidated builder is referentially transparent (no hidden state)") {
-      import models.SimpleValidated
-      import zio.prelude.ZValidation
       val validator = SimpleValidated.validator
-      val res1 = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]].i(1).op("Op")
-      val res2 = validator.asInstanceOf[NamedTuple[Tuple1["i"],
-        Tuple1[Int => NamedTuple[Tuple1["op"], Tuple1[String => ZValidation[Nothing, String, SimpleValidated]]]]]].i(1).op("Op")
+      val res1 = validator.i(1).op("Op")
+      val res2 = validator.i(1).op("Op")
 
       // Same inputs -> both success, and results equal
       assert(res1.isSuccess)
@@ -119,4 +107,3 @@ object ValidatedBuilderTest extends TestSuite {
     }
   }
 }
-
