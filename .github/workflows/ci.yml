@@ -45,30 +45,92 @@ jobs:
           echo "GITHUB_ACTOR=${{ github.actor }}" >> $GITHUB_ENV
           echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
 
-      - name: Install sbt
+      - name: Cache coursier and sbt launcher
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./.cache/coursier
+            ./.sbt-launcher
+          key: sbt-launcher-${{ runner.os }}-${{ hashFiles('project/build.properties') }}
+          restore-keys: |
+            sbt-launcher-${{ runner.os }}-
+
+      - name: Install sbt (via coursier)
         run: |
-          # Install sbt from the official repo
-          curl -sL https://repo.scala-sbt.org/scalasbt/gpg.key | sudo tee /etc/apt/trusted.gpg.d/sbt.gpg > /dev/null
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-          sudo apt-get update
-          sudo apt-get install -y sbt
+          # prepare cache dirs
+          mkdir -p ./.cache/coursier ./.sbt-launcher
+          if [ -x ./.sbt-launcher/sbt ]; then
+            echo "Found cached sbt launcher"
+            sudo mv ./.sbt-launcher/sbt /usr/local/bin/sbt
+          else
+            SBT_VERSION=$(sed -n "s/^sbt.version *= *//p" project/build.properties | tr -d '\r')
+            if [ -z "$SBT_VERSION" ]; then
+              echo "Cannot determine sbt.version from project/build.properties; defaulting to 1.12.5";
+              SBT_VERSION=1.12.5
+            fi
+
+            echo "Attempting to download official sbt release tarball for version $SBT_VERSION"
+            TAR_URL="https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz"
+            if curl -fSL "$TAR_URL" -o sbt.tgz; then
+              mkdir -p sbt && tar xzf sbt.tgz -C sbt --strip-components=1
+              chmod +x sbt/bin/sbt || true
+              sudo mv sbt/bin/sbt /usr/local/bin/sbt
+              # keep a cached copy
+              mkdir -p ./.sbt-launcher
+              cp /usr/local/bin/sbt ./.sbt-launcher/sbt || true
+            else
+              echo "Tarball download failed, falling back to coursier bootstrap"
+              if [ ! -x ./.cache/coursier/cs ]; then
+                curl -fLo ./.cache/coursier/cs https://github.com/coursier/coursier/releases/latest/download/cs && chmod +x ./.cache/coursier/cs
+              fi
+              ./.cache/coursier/cs bootstrap sbt/sbt:$SBT_VERSION -o ./.sbt-launcher/sbt && chmod +x ./.sbt-launcher/sbt || true
+              if [ -x ./.sbt-launcher/sbt ]; then
+                sudo mv ./.sbt-launcher/sbt /usr/local/bin/sbt || true
+                cp /usr/local/bin/sbt ./.sbt-launcher/sbt || true
+              else
+                echo "Failed to install sbt via both tarball and coursier; aborting"
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Check sbt is installed
+        run: |
+          sbt --version
+
+      - name: Print sbt launcher path and checksum
+        run: |
+          set -e
+          # Find sbt binary; fallback to common install location
+          SBT_BIN=$(which sbt 2>/dev/null || echo /usr/local/bin/sbt)
+          echo "sbt path: $SBT_BIN"
+          if [ -f "$SBT_BIN" ]; then
+            echo "ls -l $SBT_BIN:";
+            ls -l "$SBT_BIN" || true
+            echo "file output:";
+            file "$SBT_BIN" || true
+            echo "SHA256:";
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$SBT_BIN"; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$SBT_BIN"; else echo "no sha256 tool available"; fi
+            echo "SHA1:";
+            if command -v sha1sum >/dev/null 2>&1; then sha1sum "$SBT_BIN"; elif command -v shasum >/dev/null 2>&1; then shasum -a 1 "$SBT_BIN"; else echo "no sha1 tool available"; fi
+          else
+            echo "sbt binary not found at $SBT_BIN";
+            exit 1
+          fi
 
       - name: Run cross-build and tests for all projects
         run: |
           # Run `sbt +test` to build/test for all crossScalaVersions and subprojects
           sbt +test
 
-      - name: Run tests for withPrelude explicitly (fail early and clearly)
-        run: |
-          sbt "project withPrelude" +test
-
-      - name: Run tests for removeFix explicitly (fail early and clearly)
-        run: |
-          sbt "project removeFix" +test
-
       - name: Generate docs (mdoc)
         run: |
-          sbt docs/mdoc
+          # package the library first so a jar exists and is visible on the docs classpath,
+          # run tasks in a single sbt session to avoid classpath/reload mismatches
+          sbt "simpleBuilders/package" \
+              "show simpleBuilders/Compile/fullClasspath" \
+              "show docs/Compile/fullClasspath" \
+              "docs/mdoc"
 
       - name: Upload generated docs as artifact
         uses: actions/upload-artifact@v4
@@ -96,16 +158,78 @@ jobs:
           echo "GITHUB_ACTOR=${{ github.actor }}" >> $GITHUB_ENV
           echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
 
-      - name: Install sbt
+      - name: Cache coursier and sbt launcher
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./.cache/coursier
+            ./.sbt-launcher
+          key: sbt-launcher-${{ runner.os }}-${{ hashFiles('project/build.properties') }}
+          restore-keys: |
+            sbt-launcher-${{ runner.os }}-
+
+      - name: Install sbt (via coursier)
         run: |
-          curl -sL https://repo.scala-sbt.org/scalasbt/gpg.key | sudo tee /etc/apt/trusted.gpg.d/sbt.gpg > /dev/null
-          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
-          sudo apt-get update
-          sudo apt-get install -y sbt
+          mkdir -p ./.cache/coursier ./.sbt-launcher
+          if [ -x ./.sbt-launcher/sbt ]; then
+            echo "Found cached sbt launcher"
+            sudo mv ./.sbt-launcher/sbt /usr/local/bin/sbt
+          else
+            SBT_VERSION=$(sed -n "s/^sbt.version *= *//p" project/build.properties | tr -d '\r')
+            if [ -z "$SBT_VERSION" ]; then
+              echo "Cannot determine sbt.version from project/build.properties; defaulting to 1.12.5";
+              SBT_VERSION=1.12.5
+            fi
+
+            echo "Attempting to download official sbt release tarball for version $SBT_VERSION"
+            TAR_URL="https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz"
+            if curl -fSL "$TAR_URL" -o sbt.tgz; then
+              mkdir -p sbt && tar xzf sbt.tgz -C sbt --strip-components=1
+              chmod +x sbt/bin/sbt || true
+              sudo mv sbt/bin/sbt /usr/local/bin/sbt
+              mkdir -p ./.sbt-launcher
+              cp /usr/local/bin/sbt ./.sbt-launcher/sbt || true
+            else
+              echo "Tarball download failed, falling back to coursier bootstrap"
+              if [ ! -x ./.cache/coursier/cs ]; then
+                curl -fLo ./.cache/coursier/cs https://github.com/coursier/coursier/releases/latest/download/cs && chmod +x ./.cache/coursier/cs
+              fi
+              ./.cache/coursier/cs bootstrap sbt/sbt:$SBT_VERSION -o ./.sbt-launcher/sbt && chmod +x ./.sbt-launcher/sbt || true
+              if [ -x ./.sbt-launcher/sbt ]; then
+                sudo mv ./.sbt-launcher/sbt /usr/local/bin/sbt || true
+                cp /usr/local/bin/sbt ./.sbt-launcher/sbt || true
+              else
+                echo "Failed to install sbt via both tarball and coursier; aborting"
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Check sbt is installed
+        run: |
+          sbt --version
+
+      - name: Print sbt launcher path and checksum
+        run: |
+          set -e
+          SBT_BIN=$(which sbt 2>/dev/null || echo /usr/local/bin/sbt)
+          echo "sbt path: $SBT_BIN"
+          if [ -f "$SBT_BIN" ]; then
+            echo "ls -l $SBT_BIN:";
+            ls -l "$SBT_BIN" || true
+            echo "file output:";
+            file "$SBT_BIN" || true
+            echo "SHA256:";
+            if command -v sha256sum >/dev/null 2>&1; then sha256sum "$SBT_BIN"; elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$SBT_BIN"; else echo "no sha256 tool available"; fi
+            echo "SHA1:";
+            if command -v sha1sum >/dev/null 2>&1; then sha1sum "$SBT_BIN"; elif command -v shasum >/dev/null 2>&1; then shasum -a 1 "$SBT_BIN"; else echo "no sha1 tool available"; fi
+          else
+            echo "sbt binary not found at $SBT_BIN";
+            exit 1
+          fi
 
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Publish using the default scalaVersion (or you can force a specific scala with ++<version>)
           sbt publish

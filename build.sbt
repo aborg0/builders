@@ -4,7 +4,7 @@ ThisBuild / scalaVersion := "3.7.4"
 ThisBuild / crossScalaVersions := Seq("3.7.4", "3.8.1")
 
 // A new simple_builders subproject holds the sources previously at the root `src` directory.
-lazy val simple_builders = (project in file("simple_builders"))
+lazy val simpleBuilders = (project in file("simple_builders"))
   .settings(
     name := "simple_builders",
     scalacOptions ++= Seq(
@@ -17,7 +17,7 @@ lazy val simple_builders = (project in file("simple_builders"))
 
 // The root project is now an empty aggregator. It does not publish; subprojects are the real modules.
 lazy val root = (project in file("."))
-  .aggregate(simple_builders, withPrelude, removeFix)
+  .aggregate(simpleBuilders, withPrelude, removeFix)
   .settings(
     name := "builders-root",
     publish / skip := true
@@ -25,10 +25,13 @@ lazy val root = (project in file("."))
 
 lazy val docs = project       // new documentation project
   .in(file("builders_docs")) // important: it must not be docs/
-  .dependsOn(simple_builders)
+  .dependsOn(simpleBuilders)
   .settings(
     // docs should not be published as an artifact
-    publish / skip := true
+    publish / skip := true,
+    // Ensure docs sees compiled classes from the library project (helps mdoc find types)
+    Compile / fullClasspath ++= (simpleBuilders / Compile / fullClasspath).value,
+    Compile / unmanagedClasspath += (simpleBuilders / Compile / classDirectory).value
   )
   .enablePlugins(MdocPlugin)
 
@@ -49,14 +52,14 @@ lazy val withPrelude = project
     ),
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
-  .dependsOn(simple_builders)
+  .dependsOn(simpleBuilders)
 
 lazy val removeFix = project
   .in(file("remove_fix"))
   .settings(
 
   )
-  .dependsOn(simple_builders)
+  .dependsOn(simpleBuilders)
 
 // Add minimal GitHub Packages publishing configuration.
 // It reads repository and credentials from environment variables provided by GitHub Actions
