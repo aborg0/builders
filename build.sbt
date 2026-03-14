@@ -29,6 +29,12 @@ lazy val withPrelude = project
       //compilerPlugin(("com.kubuszok" % "hearth" % "0.1.0").cross(CrossVersion.Patch)),
       "com.lihaoyi" %% "utest" % "0.9.5" % "test", // Scala-JVM
     ),
+    scalacOptions ++= Seq(
+      "--feature",
+      "--deprecation",
+      "--unchecked",
+      "no-indent"
+    ),
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
   .dependsOn(root)
