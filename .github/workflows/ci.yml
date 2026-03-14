@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java: [17, 21, 25]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Cache sbt
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+            ~/.coursier
+          key: sbt-cache-${{ matrix.java }}-${{ hashFiles('**/build.sbt') }}
+
+      - name: Set GITHUB env for sbt
+        run: |
+          echo "GITHUB_REPOSITORY=${{ github.repository }}" >> $GITHUB_ENV
+          echo "GITHUB_ACTOR=${{ github.actor }}" >> $GITHUB_ENV
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Install sbt
+        run: |
+          # Install sbt from the official repo
+          curl -sL https://repo.scala-sbt.org/scalasbt/gpg.key | sudo tee /etc/apt/trusted.gpg.d/sbt.gpg > /dev/null
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install -y sbt
+
+      - name: Run cross-build and tests for all projects
+        run: |
+          # Run `sbt +test` to build/test for all crossScalaVersions and subprojects
+          sbt +test
+
+      - name: Run tests for withPrelude explicitly (fail early and clearly)
+        run: |
+          sbt "project withPrelude" +test
+
+      - name: Run tests for removeFix explicitly (fail early and clearly)
+        run: |
+          sbt "project removeFix" +test
+
+      - name: Generate docs (mdoc)
+        run: |
+          sbt docs/mdoc
+
+      - name: Upload generated docs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdoc-output
+          path: builders_docs/target/mdoc
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set GITHUB env for sbt
+        run: |
+          echo "GITHUB_REPOSITORY=${{ github.repository }}" >> $GITHUB_ENV
+          echo "GITHUB_ACTOR=${{ github.actor }}" >> $GITHUB_ENV
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Install sbt
+        run: |
+          curl -sL https://repo.scala-sbt.org/scalasbt/gpg.key | sudo tee /etc/apt/trusted.gpg.d/sbt.gpg > /dev/null
+          echo "deb https://repo.scala-sbt.org/scalasbt/debian all main" | sudo tee /etc/apt/sources.list.d/sbt.list
+          sudo apt-get update
+          sudo apt-get install -y sbt
+
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Publish using the default scalaVersion (or you can force a specific scala with ++<version>)
+          sbt publish
