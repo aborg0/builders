@@ -132,7 +132,7 @@ object ValidatedBuilderGenerator {
     }.distinct
 
     val unifiedErrorType: quotes.reflect.TypeRepr = errorTypeReprs match {
-      case Nil => TypeRepr.of[String]
+      case Nil => TypeRepr.of[Nothing]
       case h :: Nil => h
       case hs => hs.reduce((a, b) => OrType(a, b))
     }
@@ -299,7 +299,7 @@ object ValidatedBuilderGenerator {
     }.distinct
 
     val unifiedErrorType2: quotes.reflect.TypeRepr = errorTypeReprs2 match {
-      case Nil => TypeRepr.of[String]
+      case Nil => TypeRepr.of[Nothing]
       case h :: Nil => h
       case hs => hs.reduce((a, b) => OrType(a, b))
     }
@@ -592,7 +592,7 @@ object ValidatedBuilderGenerator {
     }
 
     val wType = TypeRepr.of[Nothing]
-    val eType = TypeRepr.of[String]
+    val eType = TypeRepr.of[Nothing]
     val aTypes = typeTuples.map(_._3)
     val allTypeParams = wType :: eType :: (aTypes :+ targetType)
 

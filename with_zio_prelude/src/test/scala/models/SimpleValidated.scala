@@ -24,5 +24,5 @@ object SimpleValidated {
 final case class Simple(i: Int, s: String, d: LocalDate)
 
 object Simple {
-  val validator: ValidatedBuilderGenerator[Simple] = ValidatedBuilderGenerator.derived[Simple]
+  val validator = ValidatedBuilderGenerator.builder[Simple]
 }

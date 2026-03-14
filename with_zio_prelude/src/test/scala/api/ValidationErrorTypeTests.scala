@@ -4,6 +4,8 @@ import models.*
 import utest.*
 import zio.prelude.ZValidation
 
+import java.time.LocalDate
+
 object ValidationErrorTypeTests extends TestSuite {
   val tests = Tests {
     test("MixedString_error_type") {
@@ -59,6 +61,15 @@ object ValidationErrorTypeTests extends TestSuite {
       // Re-assert compile-time check (sanity)
       val compileTimeCheck2: ZValidation[Nothing, String, MixedString] = MixedString.validator.i(1).op("Op").valid("Op")
       val _ = compileTimeCheck2
+    }
+    test("Simple_error_type") {
+      val b = Simple.validator.i(42)
+      val result = b.s("Op").d(LocalDate.now())
+      assert(result.isSuccess)
+
+      // Compile-time check: error channel should be Nothing
+      val compileTimeCheck: ZValidation[Nothing, Nothing, Simple] = Simple.validator.i(42).s("Op").d(LocalDate.now())
+      val _ = compileTimeCheck
     }
   }
 }
