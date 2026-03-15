@@ -13,10 +13,10 @@ enum Gender {
 
 final case class Person(firstName: String, lastName: String, gender: Gender)
 
-import api.BuilderGeneratorSimplest
-import api.BuilderGeneratorSimplest.given
-import api.BuilderTypeClass
-import api.BuilderGeneratorSimplest.caseclass3
+import _root_.api.BuilderGeneratorSimplest
+import _root_.api.BuilderGeneratorSimplest.given
+import _root_.api.BuilderTypeClass
+import _root_.api.BuilderGeneratorSimplest.caseclass3
 
 object Person extends BuilderGeneratorSimplest[Person]//(using BuilderTypeClass[Person](caseclass3(Person.apply)))
 
@@ -36,10 +36,10 @@ In case you want extra safety, you might want to disallow the `copy` method, con
 
 ```scala mdoc:fail
 final case class SimpleHolder private(value: String)
-import api.BuilderGeneratorSimplest
-import api.BuilderGeneratorSimplest.given
-import api.BuilderTypeClass
-import api.BuilderGeneratorSimplest.caseclass1
+import _root_.api.BuilderGeneratorSimplest
+import _root_.api.BuilderGeneratorSimplest.given
+import _root_.api.BuilderTypeClass
+import _root_.api.BuilderGeneratorSimplest.caseclass1
 
 object SimpleHolder extends BuilderGeneratorSimplest[SimpleHolder]//(using BuilderTypeClass[SimpleHolder](caseclass1(SimpleHolder.apply)))
 

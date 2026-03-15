@@ -125,18 +125,15 @@ jobs:
 
       - name: Generate docs (mdoc)
         run: |
-          # package the library first so a jar exists and is visible on the docs classpath,
-          # run tasks in a single sbt session to avoid classpath/reload mismatches
-          sbt "simpleBuilders/package" \
-              "show simpleBuilders/Compile/fullClasspath" \
-              "show docs/Compile/fullClasspath" \
-              "docs/mdoc"
+          sbt "docs/mdoc"
 
       - name: Upload generated docs as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: mdoc-output
+          name: mdoc-output-java-25-run-${{ github.run_id }}
           path: builders_docs/target/mdoc
+          if-no-files-found: ignore
+        if: matrix.java == 25
 
   publish:
     runs-on: ubuntu-latest
