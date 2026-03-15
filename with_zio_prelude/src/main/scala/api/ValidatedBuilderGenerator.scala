@@ -78,22 +78,28 @@ object ValidatedBuilderGenerator {
    * Macro entry point - this needs inline to trigger macro expansion.
    * Returns an object with an apply() method that returns the nested Tuple1 builder.
    */
-  inline def derived[T]: ValidatedBuilderGenerator[T] = ${ derivedImpl[T] }
+  inline def derived[T]: ValidatedBuilderGenerator[T] = ${ derivedImplNoAllow[T] }
+  inline def derivedNoAllow[T]: ValidatedBuilderGenerator[T] = ${ derivedImplNoAllow[T] }
+  inline def derivedAllow[T]: ValidatedBuilderGenerator[T] = ${ derivedImplAllow[T] }
 
   /**
    * Returns the NamedTuple-based validated builder directly for `T`.
    * The precise named-tuple shape is supplied by the macro so callers can
    * use field access like `.i(...).op(...)` without manual casts.
    */
-  transparent inline def builder[T] = ${ ValidatedBuilderGenerator.builderImpl[T] }
+  transparent inline def builder[T] = ${ ValidatedBuilderGenerator.builderImplNoAllow[T] }
+  transparent inline def builderNoAllow[T] = ${ ValidatedBuilderGenerator.builderImplNoAllow[T] }
+  transparent inline def builderAllow[T] = ${ ValidatedBuilderGenerator.builderImplAllow[T] }
 
   
   /**
    * The macro implementation that generates the validated builder.
    * Returns an object whose apply method yields the nested Tuple1 builder.
    */
-  def derivedImpl[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]] = {
+  def derivedImpl[T: Type](allowUnionArgsExpr: Expr[Boolean])(using Quotes): Expr[ValidatedBuilderGenerator[T]] = {
     import quotes.reflect.*
+
+    val allowUnionArgs: Boolean = allowUnionArgsExpr.valueOrAbort
 
     val tpe = TypeRepr.of[T]
     val typeSymbol = tpe.typeSymbol
@@ -122,10 +128,6 @@ object ValidatedBuilderGenerator {
       SmartConstructorDiscovery.discoverValidator(name, fieldType)
     }
 
-    // (builder expression is generated later after we bind the unified error type EU)
-    // Generate the builder expression based on arity
-    // val builderExpr = generateBuilderExpression[T](tpe, typeSymbol, validatorInfos, arity)
-
     // Compute the unified error type (union of field validators' error types)
     val errorTypeReprs: List[TypeRepr] = validatorInfos.collect {
       case nv: ValidatorInfo.NeedsValidation => nv.errorType.asInstanceOf[TypeRepr]
@@ -143,14 +145,11 @@ object ValidatedBuilderGenerator {
         unifiedErrorType.asType match {
           case '[eu] =>
             // builderExpr will be created once EU is bound here using the concrete eu TypeRepr
-            val builderExpr = generateBuilderWithErrorType(unifiedErrorType, tpe, typeSymbol, validatorInfos, arity)
+            val builderExpr = generateBuilderWithErrorType(unifiedErrorType, tpe, typeSymbol, validatorInfos, arity, allowUnionArgs)
              // Build NamedTuple wrapper same as before, using the generated builderExpr
              arity match {
                case 1 =>
-                 val prim0 = validatorInfos(0) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
+                 val prim0 = computePrimType(validatorInfos(0), allowUnionArgs)
                  prim0.asType match {
                    case '[p0] =>
                     '{
@@ -166,53 +165,50 @@ object ValidatedBuilderGenerator {
                  }
 
                case 2 =>
-                 val prim0 = validatorInfos(0) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 val prim1 = validatorInfos(1) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 (prim0.asType, prim1.asType) match {
-                   case ('[p0], '[p1]) =>
-                    '{
-                      type PrimTypes = p0 *: p1 *: EmptyTuple
-                      type PrimNT = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                      new ValidatedBuilderGenerator[t] {
-                        type Builder = ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
-                        def apply(): Builder = ${ builderExpr }.asInstanceOf[Builder]
-                      }
-                    }.asExprOf[ValidatedBuilderGenerator[T]]
+                 val prim0 = computePrimType(validatorInfos(0), allowUnionArgs)
+                 val prim1 = computePrimType(validatorInfos(1), allowUnionArgs)
+                 prim0.asType match {
+                   case '[p0] =>
+                     prim1.asType match {
+                       case '[p1] =>
+                         '{
+                           type PrimTypes = p0 *: p1 *: EmptyTuple
+                           type PrimNT = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
+                           new ValidatedBuilderGenerator[t] {
+                             type Builder = ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
+                             def apply(): Builder = ${ builderExpr }.asInstanceOf[Builder]
+                           }
+                         }.asExprOf[ValidatedBuilderGenerator[T]]
+                       case _ =>
+                         report.errorAndAbort("Could not compute primitive types for fields 0,1 when deriving builder for " + Type.show[t])
+                     }
                    case _ =>
                      report.errorAndAbort("Could not compute primitive types for fields 0,1 when deriving builder for " + Type.show[t])
                  }
 
                case 3 =>
-                 val prim0 = validatorInfos(0) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 val prim1 = validatorInfos(1) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 val prim2 = validatorInfos(2) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 (prim0.asType, prim1.asType, prim2.asType) match {
-                   case ('[p0], '[p1], '[p2]) =>
-                    '{
-                      type PrimTypes = p0 *: p1 *: p2 *: EmptyTuple
-                      type PrimNT = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                      new ValidatedBuilderGenerator[t] {
-                        type Builder = ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
-                        def apply(): Builder = ${ builderExpr }.asInstanceOf[Builder]
-                      }
-                    }.asExprOf[ValidatedBuilderGenerator[T]]
-                   case _ =>
-                     report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when deriving builder for " + Type.show[t])
+                 val prim0 = computePrimType(validatorInfos(0), allowUnionArgs)
+                 val prim1 = computePrimType(validatorInfos(1), allowUnionArgs)
+                 val prim2 = computePrimType(validatorInfos(2), allowUnionArgs)
+                 prim0.asType match {
+                   case '[p0] =>
+                     prim1.asType match {
+                       case '[p1] =>
+                         prim2.asType match {
+                           case '[p2] =>
+                             '{
+                               type PrimTypes = p0 *: p1 *: p2 *: EmptyTuple
+                               type PrimNT = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
+                               new ValidatedBuilderGenerator[t] {
+                                 type Builder = ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
+                                 def apply(): Builder = ${ builderExpr }.asInstanceOf[Builder]
+                               }
+                             }.asExprOf[ValidatedBuilderGenerator[T]]
+                           case _ => report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when deriving builder for " + Type.show[t])
+                         }
+                       case _ => report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when deriving builder for " + Type.show[t])
+                     }
+                   case _ => report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when deriving builder for " + Type.show[t])
                  }
 
                case n =>
@@ -226,8 +222,12 @@ object ValidatedBuilderGenerator {
     }
   }
 
-  // Legacy helper kept for debugging; not used by inline builder anymore
-  def builderImplAny[T: Type](using Quotes): Expr[scala.NamedTuple.AnyNamedTuple] = {
+  // Wrapper macros that call `derivedImpl` with literal booleans to avoid FromExpr extraction issues
+  def derivedImplAllow[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]] = derivedImpl[T]('{true})
+  def derivedImplNoAllow[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]] = derivedImpl[T]('{false})
+
+   // Legacy helper kept for debugging; not used by inline builder anymore
+   def builderImplAny[T: Type](using Quotes): Expr[scala.NamedTuple.AnyNamedTuple] = {
     import quotes.reflect.*
 
     val tpe = TypeRepr.of[T]
@@ -252,7 +252,8 @@ object ValidatedBuilderGenerator {
       SmartConstructorDiscovery.discoverValidator(name, fieldType)
     }
 
-    val builderExpr = generateBuilderExpression[String, T](tpe, typeSymbol, validatorInfos, arity)
+    // legacy path: don't allow union args
+    val builderExpr = generateBuilderExpression[String, T](tpe, typeSymbol, validatorInfos, arity, /*allowUnion*/ false)
 
     TypeRepr.of[T].asType match {
       case '[t] =>
@@ -265,8 +266,10 @@ object ValidatedBuilderGenerator {
   // Pragmatic builder: we return AnyNamedTuple at the type level, but
   // internally cast to the precise NamedTuple/ValidatedBuilderFor shape
   // parameterised by the primitive input types discovered for each field.
-  def builderImpl[T: Type](using Quotes): Expr[Any] = {
+  def builderImpl[T: Type](allowUnionArgsExpr: Expr[Boolean])(using Quotes): Expr[Any] = {
     import quotes.reflect.*
+
+    val allowUnionArgs: Boolean = allowUnionArgsExpr.valueOrAbort
 
     val tpe = TypeRepr.of[T]
     val typeSymbol = tpe.typeSymbol
@@ -291,8 +294,6 @@ object ValidatedBuilderGenerator {
     }
 
     // Generate the builder expression based on arity
-    // val builderExpr = generateBuilderExpression[T](tpe, typeSymbol, validatorInfos, arity)
-
     // Inlined builderImpl path: compute unified error type and bind eu
     val errorTypeReprs2: List[TypeRepr] = validatorInfos.collect {
       case nv: ValidatorInfo.NeedsValidation => nv.errorType.asInstanceOf[TypeRepr]
@@ -308,70 +309,67 @@ object ValidatedBuilderGenerator {
       case '[t] =>
         unifiedErrorType2.asType match {
           case '[eu] =>
-            val builderExpr2 = generateBuilderWithErrorType(unifiedErrorType2, tpe, typeSymbol, validatorInfos, arity)
+            val builderExpr2 = generateBuilderWithErrorType(unifiedErrorType2, tpe, typeSymbol, validatorInfos, arity, allowUnionArgs)
             arity match {
                case 1 =>
-                 val prim0 = validatorInfos(0) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 prim0.asType match {
-                   case '[p0] =>
-                    '{
-                      type PrimTypes = p0 *: EmptyTuple
-                      type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                      ${ builderExpr2 }.asInstanceOf[
-                        ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
-                      ]
-                    }
+                 val prim0 = computePrimType(validatorInfos(0), allowUnionArgs)
+                  prim0.asType match {
+                    case '[p0] =>
+                     '{
+                       type PrimTypes = p0 *: EmptyTuple
+                       type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
+                       ${ builderExpr2 }.asInstanceOf[
+                         ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
+                       ]
+                     }
                    case _ =>
                      report.errorAndAbort("Could not compute primitive type for field 0 when building builder for " + Type.show[t])
                  }
 
                case 2 =>
-                 val prim0 = validatorInfos(0) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 val prim1 = validatorInfos(1) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 (prim0.asType, prim1.asType) match {
-                   case ('[p0], '[p1]) =>
-                    '{
-                      type PrimTypes = p0 *: p1 *: EmptyTuple
-                      type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                      ${ builderExpr2 }.asInstanceOf[
-                        ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
-                      ]
-                    }
+                 val prim0 = computePrimType(validatorInfos(0), allowUnionArgs)
+                 val prim1 = computePrimType(validatorInfos(1), allowUnionArgs)
+                 prim0.asType match {
+                   case '[p0] =>
+                     prim1.asType match {
+                       case '[p1] =>
+                        '{
+                          type PrimTypes = p0 *: p1 *: EmptyTuple
+                          type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
+                          ${ builderExpr2 }.asInstanceOf[
+                            ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
+                          ]
+                        }
+                       case _ =>
+                         report.errorAndAbort("Could not compute primitive types for fields 0,1 when building builder for " + Type.show[t])
+                     }
                    case _ =>
                      report.errorAndAbort("Could not compute primitive types for fields 0,1 when building builder for " + Type.show[t])
                  }
 
                case 3 =>
-                 val prim0 = validatorInfos(0) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 val prim1 = validatorInfos(1) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 val prim2 = validatorInfos(2) match {
-                   case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]
-                   case nv: ValidatorInfo.NoValidation   => nv.plainType.asInstanceOf[TypeRepr]
-                 }
-                 (prim0.asType, prim1.asType, prim2.asType) match {
-                   case ('[p0], '[p1], '[p2]) =>
-                    '{
-                      type PrimTypes = p0 *: p1 *: p2 *: EmptyTuple
-                      type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
-                      ${ builderExpr2 }.asInstanceOf[
-                        ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
-                      ]
-                    }
+                 val prim0 = computePrimType(validatorInfos(0), allowUnionArgs)
+                 val prim1 = computePrimType(validatorInfos(1), allowUnionArgs)
+                 val prim2 = computePrimType(validatorInfos(2), allowUnionArgs)
+                 prim0.asType match {
+                   case '[p0] =>
+                     prim1.asType match {
+                       case '[p1] =>
+                         prim2.asType match {
+                           case '[p2] =>
+                            '{
+                              type PrimTypes = p0 *: p1 *: p2 *: EmptyTuple
+                              type PrimNT    = NamedTuple[NamedTuple.Names[Tup[t]], PrimTypes]
+                              ${ builderExpr2 }.asInstanceOf[
+                                ValidatedBuilderFor[Tuple.Head[Split[PrimNT, 1]], Tuple.Last[Split[PrimNT, 1]], t, eu]
+                              ]
+                            }
+                           case _ =>
+                             report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when building builder for " + Type.show[t])
+                         }
+                       case _ =>
+                         report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when building builder for " + Type.show[t])
+                     }
                    case _ =>
                      report.errorAndAbort("Could not compute primitive types for fields 0,1,2 when building builder for " + Type.show[t])
                  }
@@ -387,6 +385,30 @@ object ValidatedBuilderGenerator {
     }
   }
 
+  // Wrapper macros to call builderImpl with literal booleans to avoid FromExpr extraction issues
+  def builderImplAllow[T: Type](using Quotes): Expr[Any] = builderImpl[T]('{true})
+  def builderImplNoAllow[T: Type](using Quotes): Expr[Any] = builderImpl[T]('{false})
+
+  /**
+   * Compute the primitive parameter type to expose in the builder.
+   * When allowUnion is true and a smart constructor exists with a different
+   * primitive type than the wrapped field type, we expose a union P | W so
+   * callers may pass either the primitive or the already-wrapped value.
+   */
+  private def computePrimType(using Quotes)(info: ValidatorInfo, allowUnion: Boolean): quotes.reflect.TypeRepr = {
+    import quotes.reflect.*
+    info match {
+      case nv: ValidatorInfo.NeedsValidation =>
+        val p = nv.primitiveType.asInstanceOf[TypeRepr]
+        val w = nv.wrappedType.asInstanceOf[TypeRepr]
+        // Compare dealiased/widened underlying types to avoid unions for opaque aliases
+        val pBase = p.widen.dealias
+        val wBase = w.widen.dealias
+        if (allowUnion && !(pBase =:= wBase)) OrType(p, w) else p
+      case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr]
+    }
+  }
+
   /**
    * Generate the builder expression based on arity.
    */
@@ -394,22 +416,24 @@ object ValidatedBuilderGenerator {
     targetType: quotes.reflect.TypeRepr,
     targetSymbol: quotes.reflect.Symbol,
     validatorInfos: List[ValidatorInfo],
-    arity: Int
+    arity: Int,
+    allowUnion: Boolean
   ): Expr[Any] = {
     import quotes.reflect.*
+
 
     arity match {
       case 1 =>
         val info = validatorInfos.head
-        generateArity1Builder[EU, T](targetType, targetSymbol, info)
+        generateArity1Builder[EU, T](targetType, targetSymbol, info, allowUnion)
 
       case 2 =>
         val (info0, info1) = (validatorInfos(0), validatorInfos(1))
-        generateArity2Builder[EU, T](targetType, targetSymbol, info0, info1)
+        generateArity2Builder[EU, T](targetType, targetSymbol, info0, info1, allowUnion)
 
       case 3 =>
         val (info0, info1, info2) = (validatorInfos(0), validatorInfos(1), validatorInfos(2))
-        generateArity3Builder[EU, T](targetType, targetSymbol, info0, info1, info2)
+        generateArity3Builder[EU, T](targetType, targetSymbol, info0, info1, info2, allowUnion)
 
       case n =>
         report.errorAndAbort(
@@ -451,78 +475,138 @@ object ValidatedBuilderGenerator {
    * Generate builder for arity 1.
    */
   private def generateArity1Builder[EU: Type, T: Type](using Quotes)(
-    targetType: quotes.reflect.TypeRepr,
-    targetSymbol: quotes.reflect.Symbol,
-    info: ValidatorInfo
-  ): Expr[Any] = {
-    import quotes.reflect.*
-    generateBuilderWithErrorType(TypeRepr.of[EU], targetType, targetSymbol, List(info), 1)
-  }
+     targetType: quotes.reflect.TypeRepr,
+     targetSymbol: quotes.reflect.Symbol,
+     info: ValidatorInfo,
+     allowUnion: Boolean
+   ): Expr[Any] = {
+     import quotes.reflect.*
+     generateBuilderWithErrorType(TypeRepr.of[EU], targetType, targetSymbol, List(info), 1, allowUnion)
+   }
 
   /** 
    * Generate builder for arity 2.
    */
   private def generateArity2Builder[EU: Type, T: Type](using Quotes)(
-     targetType: quotes.reflect.TypeRepr,
-     targetSymbol: quotes.reflect.Symbol,
-     info0: ValidatorInfo,
-     info1: ValidatorInfo
-   ): Expr[Any] = {
-     import quotes.reflect.*
-     generateBuilderWithErrorType(TypeRepr.of[EU], targetType, targetSymbol, List(info0, info1), 2)
-   }
+       targetType: quotes.reflect.TypeRepr,
+       targetSymbol: quotes.reflect.Symbol,
+       info0: ValidatorInfo,
+       info1: ValidatorInfo,
+       allowUnion: Boolean
+     ): Expr[Any] = {
+       import quotes.reflect.*
+      generateBuilderWithErrorType(TypeRepr.of[EU], targetType, targetSymbol, List(info0, info1), 2, allowUnion)
+     }
 
   /**
    * Generate builder for arity 3.
    */
   private def generateArity3Builder[EU: Type, T: Type](using Quotes)(
-    targetType: quotes.reflect.TypeRepr,
-    targetSymbol: quotes.reflect.Symbol,
-    info0: ValidatorInfo,
-    info1: ValidatorInfo,
-    info2: ValidatorInfo
-  ): Expr[Any] = {
-    import quotes.reflect.*
-    generateBuilderWithErrorType(TypeRepr.of[EU], targetType, targetSymbol, List(info0, info1, info2), 3)
-  }
+     targetType: quotes.reflect.TypeRepr,
+     targetSymbol: quotes.reflect.Symbol,
+     info0: ValidatorInfo,
+     info1: ValidatorInfo,
+     info2: ValidatorInfo,
+     allowUnion: Boolean
+   ): Expr[Any] = {
+     import quotes.reflect.*
+     generateBuilderWithErrorType(TypeRepr.of[EU], targetType, targetSymbol, List(info0, info1, info2), 3, allowUnion)
+   }
 
   /**
    * Generate validation expression for a field.
    */
   private def generateValidationExpr[EU: Type, W: Type](using Quotes)(
     info: ValidatorInfo,
-    paramExpr: Expr[Any]
+    paramExpr: Expr[Any],
+    allowUnion: Boolean
   ): Expr[ZValidation[Nothing, EU, W]] = {
     import quotes.reflect.*
 
     info match {
       case nv: ValidatorInfo.NeedsValidation =>
-        nv.primitiveType.asInstanceOf[TypeRepr].asType match {
-          case '[p] =>
-            nv.wrappedType.asInstanceOf[TypeRepr].asType match {
-              case '[w] =>
-                val typedParam = paramExpr.asExprOf[p]
-                val companionSymbol = nv.companionSymbol.asInstanceOf[Symbol]
-                val companionRef = Ref(companionSymbol)
-                val methodSymbol = companionSymbol.declaredMethod(nv.methodName).head
+        // Primitive and wrapped type representations
+        val primTypeRepr = nv.primitiveType.asInstanceOf[TypeRepr]
+        val wrappedTypeRepr = nv.wrappedType.asInstanceOf[TypeRepr]
 
-                nv.validationKind match {
-                  case FromEither =>
-                    val eitherExpr = Apply(Select(companionRef, methodSymbol), List(typedParam.asTerm)).asExprOf[Either[Any, w]]
-                    val base = '{ ZValidation.fromEither($eitherExpr) }
-                    // Map/convert error type to EU and narrow result to W
-                    '{ $base.mapError((e: Any) => e.asInstanceOf[EU]).asInstanceOf[ZValidation[Nothing, EU, w]] }.asInstanceOf[Expr[ZValidation[Nothing, EU, W]]]
+        // If union args are allowed and primitive differs from wrapped, generate
+        // a runtime match that accepts either the already-wrapped value or the primitive.
+        // However, if the wrapped type is uncheckable at runtime (e.g. opaque types
+        // that erase to the same runtime type as the primitive), the pattern test
+        // will be unreliable and will incorrectly accept primitive values as wrapped.
+        // In that case prefer the smart-constructor path (validate primitive) so
+        // invalid primitives are rejected as expected.
+        def isRuntimeCheckable(tp: TypeRepr): Boolean = {
+          val base = tp.widen.dealias
+          val sym = base.typeSymbol
+          if (sym == Symbol.noSymbol) false
+          else if (sym.flags.is(Flags.Opaque)) false
+          else if (sym.flags.is(Flags.Module) || sym.flags.is(Flags.Case) || sym.flags.is(Flags.Enum) || sym.flags.is(Flags.Trait)) true
+          else {
+            // For ordinary classes (e.g., java.lang.String, java.lang.Throwable) we conservatively consider them runtime-checkable.
+            // Opaque aliases were filtered above.
+            true
+          }
+        }
 
-                  case FromValidation =>
-                    val call = Apply(Select(companionRef, methodSymbol), List(typedParam.asTerm))
-                    val base = call.asExprOf[ZValidation[Nothing, Any, w]]
-                    '{ $base.mapError((e: Any) => e.asInstanceOf[EU]).asInstanceOf[ZValidation[Nothing, EU, w]] }.asInstanceOf[Expr[ZValidation[Nothing, EU, W]]]
-                }
-              case _ =>
-                report.errorAndAbort("Could not match wrapped type")
-            }
-          case _ =>
-            report.errorAndAbort("Could not match primitive type")
+        if (allowUnion && !(primTypeRepr =:= wrappedTypeRepr) && isRuntimeCheckable(wrappedTypeRepr)) {
+          primTypeRepr.asType match {
+            case '[p] =>
+              wrappedTypeRepr.asType match {
+                case '[w] =>
+                  // paramExpr may be of type p | w; match at runtime
+                  '{
+                    ($paramExpr: Any) match {
+                      case x: w => ZValidation.succeed(x.asInstanceOf[w]).asInstanceOf[ZValidation[Nothing, EU, w]]
+                      case other => ${
+                        // Delegate to the normal path using other.asInstanceOf[p]
+                        generateValidationExpr[EU, W](nv, '{ other.asInstanceOf[p] }, /*allowUnion*/ false)
+                      }
+                    }
+                  }.asInstanceOf[Expr[ZValidation[Nothing, EU, W]]]
+                case _ => report.errorAndAbort("Could not match wrapped type")
+              }
+            case _ => report.errorAndAbort("Could not match primitive type")
+          }
+        } else {
+          // Existing behavior: parameter is the primitive type (or no union allowed)
+          primTypeRepr.asType match {
+            case '[p] =>
+              wrappedTypeRepr.asType match {
+                case '[w] =>
+                  val companionSymbol = nv.companionSymbol.asInstanceOf[Symbol]
+                  val companionRef = Ref(companionSymbol)
+                  val methodSymbol = companionSymbol.declaredMethod(nv.methodName).head
+
+                  // Create a typed term for the parameter to pass to the companion method
+                  val paramTerm = paramExpr.asTerm
+                  val typedParamTerm = Typed(paramTerm, Inferred(primTypeRepr))
+
+                  nv.validationKind match {
+                    case FromEither =>
+                      val eitherTerm = Apply(Select(companionRef, methodSymbol), List(typedParamTerm))
+                      val eitherExprAny: Expr[Any] = eitherTerm.asExpr
+                      // Avoid precise asExprOf casts; perform runtime cast inside quote and convert to Validation
+                      '{
+                        val e = $eitherExprAny.asInstanceOf[Either[Any, w]]
+                        val v = zio.prelude.ZValidation.fromEither(e)
+                        v.mapError((err: Any) => err.asInstanceOf[EU]).asInstanceOf[ZValidation[Nothing, EU, w]]
+                      }.asInstanceOf[Expr[ZValidation[Nothing, EU, W]]]
+
+                    case FromValidation =>
+                      val callTerm = Apply(Select(companionRef, methodSymbol), List(typedParamTerm))
+                      val callExprAny: Expr[Any] = callTerm.asExpr
+                      '{
+                        val v = $callExprAny.asInstanceOf[ZValidation[Nothing, Any, w]]
+                        v.mapError((err: Any) => err.asInstanceOf[EU]).asInstanceOf[ZValidation[Nothing, EU, w]]
+                      }.asInstanceOf[Expr[ZValidation[Nothing, EU, W]]]
+                  }
+                case _ =>
+                  report.errorAndAbort("Could not match wrapped type")
+              }
+            case _ =>
+              report.errorAndAbort("Could not match primitive type")
+          }
         }
 
       case nv: ValidatorInfo.NoValidation =>
@@ -657,7 +741,8 @@ object ValidatedBuilderGenerator {
     targetType: quotes.reflect.TypeRepr,
     targetSymbol: quotes.reflect.Symbol,
     validatorInfos: List[ValidatorInfo],
-    arity: Int
+    arity: Int,
+    allowUnion: Boolean
   ): Expr[Any] = {
     import quotes.reflect.*
 
@@ -668,7 +753,7 @@ object ValidatedBuilderGenerator {
             arity match {
               case 1 =>
                 val info = validatorInfos.head
-                val prim = info match { case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
+                val prim = computePrimType(info, allowUnion)
                 prim.asType match {
                   case '[p0] =>
                     val fieldType = info match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
@@ -681,7 +766,7 @@ object ValidatedBuilderGenerator {
                         val constructorExpr = constructorTerm.asExprOf[f0 => t]
                         '{
                           val raw = (a0: p0) => {
-                            val v0 = ${ generateValidationExpr[eu, f0](info, '{ a0 }) }
+                            val v0 = ${ generateValidationExpr[eu, f0](info, '{ a0 }, allowUnion) }
                             v0.map(${ constructorExpr })
                           }
                           caseclass1(raw)
@@ -693,57 +778,81 @@ object ValidatedBuilderGenerator {
 
               case 2 =>
                 val info0 = validatorInfos(0); val info1 = validatorInfos(1)
-                val prim0 = info0 match { case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                val prim1 = info1 match { case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                (prim0.asType, prim1.asType) match {
-                  case ('[p0], '[p1]) =>
-                    val field0 = info0 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                    val field1 = info1 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                    (field0.asType, field1.asType) match {
-                      case ('[f0], '[f1]) =>
-                        val companionRef = Ref(targetSymbol.companionModule)
-                        val applyMethod = targetSymbol.companionModule.declaredMethod("apply").head
-                        val constructorTerm = Lambda(owner = Symbol.spliceOwner, tpe = MethodType(List("x","y"))(_ => List(field0, field1), _ => targetType), rhsFn = (sym, params) => companionRef.select(applyMethod).appliedToArgs(params.asInstanceOf[List[Term]]))
-                        val constructorExpr = constructorTerm.asExprOf[(f0, f1) => t]
-                        '{
-                          val raw = (a0: p0, a1: p1) => {
-                            val v0 = ${ generateValidationExpr[eu, f0](info0, '{ a0 }) }
-                            val v1 = ${ generateValidationExpr[eu, f1](info1, '{ a1 }) }
-                            v0.zipWith(v1)(${ constructorExpr })
-                          }
-                          caseclass2(raw)
+                val prim0 = computePrimType(info0, allowUnion)
+                val prim1 = computePrimType(info1, allowUnion)
+                prim0.asType match {
+                  case '[p0] =>
+                    prim1.asType match {
+                      case '[p1] =>
+                        val field0 = info0 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
+                        val field1 = info1 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
+                        field0.asType match {
+                          case '[f0] =>
+                            field1.asType match {
+                              case '[f1] =>
+                                val companionRef = Ref(targetSymbol.companionModule)
+                                val applyMethod = targetSymbol.companionModule.declaredMethod("apply").head
+                                val constructorTerm = Lambda(owner = Symbol.spliceOwner, tpe = MethodType(List("x","y"))(_ => List(field0, field1), _ => targetType), rhsFn = (sym, params) => companionRef.select(applyMethod).appliedToArgs(params.asInstanceOf[List[Term]]))
+                                val constructorExpr = constructorTerm.asExprOf[(f0, f1) => t]
+                                '{
+                                  val raw = (a0: p0, a1: p1) => {
+                                    val v0 = ${ generateValidationExpr[eu, f0](info0, '{ a0 }, allowUnion) }
+                                    val v1 = ${ generateValidationExpr[eu, f1](info1, '{ a1 }, allowUnion) }
+                                    v0.zipWith(v1)(${ constructorExpr })
+                                  }
+                                  caseclass2(raw)
+                                }
+                              case _ => report.errorAndAbort("Could not match field types for arity=2")
+                            }
+                          case _ => report.errorAndAbort("Could not match field types for arity=2")
                         }
-                      case _ => report.errorAndAbort("Could not match field types for arity=2")
+                      case _ => report.errorAndAbort("Could not compute primitive types for fields 0,1 when building builder for " + Type.show[t])
                     }
-                  case _ => report.errorAndAbort("Could not compute primitive types for fields in arity=2")
+                  case _ => report.errorAndAbort("Could not compute primitive types for fields 0,1 when building builder for " + Type.show[t])
                 }
 
               case 3 =>
                 val info0 = validatorInfos(0); val info1 = validatorInfos(1); val info2 = validatorInfos(2)
-                val prim0 = info0 match { case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                val prim1 = info1 match { case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                val prim2 = info2 match { case nv: ValidatorInfo.NeedsValidation => nv.primitiveType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                (prim0.asType, prim1.asType, prim2.asType) match {
-                  case ('[p0], '[p1], '[p2]) =>
-                    val field0 = info0 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                    val field1 = info1 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                    val field2 = info2 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
-                    (field0.asType, field1.asType, field2.asType) match {
-                      case ('[f0], '[f1], '[f2]) =>
-                        val companionRef = Ref(targetSymbol.companionModule)
-                        val applyMethod = targetSymbol.companionModule.declaredMethod("apply").head
-                        val constructorTerm = Lambda(owner = Symbol.spliceOwner, tpe = MethodType(List("x","y","z"))(_ => List(field0, field1, field2), _ => targetType), rhsFn = (sym, params) => companionRef.select(applyMethod).appliedToArgs(params.asInstanceOf[List[Term]]))
-                        val constructorExpr = constructorTerm.asExprOf[(f0, f1, f2) => t]
-                        '{
-                          val raw = (a0: p0, a1: p1, a2: p2) => {
-                            val v0 = ${ generateValidationExpr[eu, f0](info0, '{ a0 }) }
-                            val v1 = ${ generateValidationExpr[eu, f1](info1, '{ a1 }) }
-                            val v2 = ${ generateValidationExpr[eu, f2](info2, '{ a2 }) }
-                            ZValidation.validateWith(v0, v1, v2)(${ constructorExpr })
-                          }
-                          caseclass3(raw)
+                val prim0 = computePrimType(info0, allowUnion)
+                val prim1 = computePrimType(info1, allowUnion)
+                val prim2 = computePrimType(info2, allowUnion)
+                prim0.asType match {
+                  case '[p0] =>
+                    prim1.asType match {
+                      case '[p1] =>
+                        prim2.asType match {
+                          case '[p2] =>
+                            val field0 = info0 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
+                            val field1 = info1 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
+                            val field2 = info2 match { case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]; case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr] }
+                            field0.asType match {
+                              case '[f0] =>
+                                field1.asType match {
+                                  case '[f1] =>
+                                    field2.asType match {
+                                      case '[f2] =>
+                                        val companionRef = Ref(targetSymbol.companionModule)
+                                        val applyMethod = targetSymbol.companionModule.declaredMethod("apply").head
+                                        val constructorTerm = Lambda(owner = Symbol.spliceOwner, tpe = MethodType(List("x","y","z"))(_ => List(field0, field1, field2), _ => targetType), rhsFn = (sym, params) => companionRef.select(applyMethod).appliedToArgs(params.asInstanceOf[List[Term]]))
+                                        val constructorExpr = constructorTerm.asExprOf[(f0, f1, f2) => t]
+                                        '{
+                                          val raw = (a0: p0, a1: p1, a2: p2) => {
+                                            val v0 = ${ generateValidationExpr[eu, f0](info0, '{ a0 }, allowUnion) }
+                                            val v1 = ${ generateValidationExpr[eu, f1](info1, '{ a1 }, allowUnion) }
+                                            val v2 = ${ generateValidationExpr[eu, f2](info2, '{ a2 }, allowUnion) }
+                                            ZValidation.validateWith(v0, v1, v2)(${ constructorExpr })
+                                          }
+                                          caseclass3(raw)
+                                        }
+                                      case _ => report.errorAndAbort("Could not match field types for arity=3")
+                                    }
+                                  case _ => report.errorAndAbort("Could not match field types for arity=3")
+                                }
+                              case _ => report.errorAndAbort("Could not match field types for arity=3")
+                            }
+                          case _ => report.errorAndAbort("Could not compute primitive types for fields in arity=3")
                         }
-                      case _ => report.errorAndAbort("Could not match field types for arity=3")
+                      case _ => report.errorAndAbort("Could not compute primitive types for fields in arity=3")
                     }
                   case _ => report.errorAndAbort("Could not compute primitive types for fields in arity=3")
                 }

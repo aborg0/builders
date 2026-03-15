@@ -17,12 +17,14 @@ object SimpleValidated {
   import Opaque.Op
   // The builder keeps the primitive input types and original field names,
   // so call sites can use `.i(...).op(...)` directly.
-  val validator = ValidatedBuilderGenerator.builder[SimpleValidated]
+  val validatorSmarter = ValidatedBuilderGenerator.builder[SimpleValidated]
+  val validator = ValidatedBuilderGenerator.builderNoAllow[SimpleValidated]
 }
 
 
 final case class Simple(i: Int, s: String, d: LocalDate)
 
 object Simple {
-  val validator = ValidatedBuilderGenerator.builder[Simple]
+  val validatorSmarter = ValidatedBuilderGenerator.builder[Simple]
+  val validator = ValidatedBuilderGenerator.builderNoAllow[Simple]
 }
