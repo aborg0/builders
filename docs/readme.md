@@ -13,10 +13,10 @@ enum Gender {
 
 final case class Person(firstName: String, lastName: String, gender: Gender)
 
-import _root_.api.BuilderGeneratorSimplest
-import _root_.api.BuilderGeneratorSimplest.given
-import _root_.api.BuilderTypeClass
-import _root_.api.BuilderGeneratorSimplest.caseclass3
+import api.BuilderGeneratorSimplest
+import api.BuilderGeneratorSimplest.given
+import api.BuilderTypeClass
+import api.BuilderGeneratorSimplest.caseclass3
 
 object Person extends BuilderGeneratorSimplest[Person]//(using BuilderTypeClass[Person](caseclass3(Person.apply)))
 
@@ -36,10 +36,10 @@ In case you want extra safety, you might want to disallow the `copy` method, con
 
 ```scala mdoc:fail
 final case class SimpleHolder private(value: String)
-import _root_.api.BuilderGeneratorSimplest
-import _root_.api.BuilderGeneratorSimplest.given
-import _root_.api.BuilderTypeClass
-import _root_.api.BuilderGeneratorSimplest.caseclass1
+import api.BuilderGeneratorSimplest
+import api.BuilderGeneratorSimplest.given
+import api.BuilderTypeClass
+import api.BuilderGeneratorSimplest.caseclass1
 
 object SimpleHolder extends BuilderGeneratorSimplest[SimpleHolder]//(using BuilderTypeClass[SimpleHolder](caseclass1(SimpleHolder.apply)))
 
@@ -72,15 +72,12 @@ If you want callers to be able to pass either the primitive input (e.g. String) 
 constructed wrapped value (e.g. an opaque type instance), use the per-call opt-in APIs
 `builderAllow` / `derivedAllow`.
 
-Below are small, self-contained examples that mdoc can compile and run. Explanations are
-placed between the code blocks to make the examples easier to read.
-
 First, a minimal demo using the existing `playground.Opaque` smart constructors. We define a
 local case class to demonstrate how the macro works without depending on test-only `models`.
 
 ```scala mdoc
-import _root_.api.ValidatedBuilderGenerator
-import _root_.playground.Opaque
+import api.ValidatedBuilderGenerator
+import playground.Opaque
 
 // A tiny case class that uses the Opaque.Op wrapped type
 final case class Demo(i: Int, op: Opaque.Op)
@@ -94,14 +91,12 @@ object Demo {
 Demo.validator.i(1).op("Op")
 ```
 
-The output above shows the final expression's result as a comment in the generated docs, so
-avoid binding the final expression to a `val` if you want to display the produced value. The
-next example demonstrates the opt-in union-accepting builder that also accepts already-
+The next example demonstrates the opt-in union-accepting builder that also accepts already-
 wrapped values.
 
 ```scala mdoc
-import _root_.api.ValidatedBuilderGenerator
-import _root_.playground.Opaque
+import api.ValidatedBuilderGenerator
+import playground.Opaque
 
 final case class Demo2(i: Int, op: Opaque.Op)
 object Demo2 {
@@ -120,7 +115,3 @@ You can mix fields that have different validation styles (Either-based, ZValidat
 plain types) — the macro computes a unified error type automatically. If you prefer the strict
 behaviour, use `builder` / `derived`; if you want callers to be able to pass already-wrapped
 values too, use `builderAllow` / `derivedAllow`.
-
-Note: mdoc shows the result of the last expression in a code block as a comment in the rendered
-document. If you don't want the result printed, assign intermediate steps to `val` and avoid
-making the final expression an unbound value.

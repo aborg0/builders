@@ -11,4 +11,4 @@ Check [builder_docs/target/mdoc/readme.md](builders_docs/target/mdoc/readme.md),
 docs/mdoc
 ```
 
-You can check the non-evaluated documentation at [builders_docs/readme.md](docs/readme.md) as well.
+You can check the non-evaluated documentation at [docs/readme.md](docs/readme.md) as well.
