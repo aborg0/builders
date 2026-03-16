@@ -45,20 +45,60 @@ object SmartConstructorDiscovery {
     MacroDebugger.log(s"  Type symbol: ${typeSymbol.fullName}")
 
     // Find the companion object. This is tricky for opaque types.
-    val companionOpt: Option[Symbol] = 
+    val companionOpt: Option[Symbol] =
       if (typeSymbol.companionModule.exists && typeSymbol.companionModule != Symbol.noSymbol) {
         MacroDebugger.log(s"  Found standard companion: ${typeSymbol.companionModule.fullName}")
         Some(typeSymbol.companionModule)
       } else {
         MacroDebugger.log(s"  Standard companion not found for ${typeSymbol.fullName}. Looking for sibling module with name '${typeSymbol.name}'.")
         val owner = typeSymbol.owner
-        owner.declarations.find(s => (s.name.init == typeSymbol.name || s.name == typeSymbol.name) && s.flags.is(Flags.Module)) match {
-          case Some(sibling) => 
-            MacroDebugger.log(s"  Found sibling companion module: ${sibling.fullName}")
-            Some(sibling)
+
+        // Direct sibling lookup (works for regular classes/objects)
+        val directSibling = owner.declarations.find(s => (s.name.init == typeSymbol.name || s.name == typeSymbol.name) && s.flags.is(Flags.Module))
+        directSibling match {
+          case some @ Some(s) =>
+            MacroDebugger.log(s"  Found sibling companion module: ${s.fullName}")
+            some
           case None =>
-            MacroDebugger.log(s"  No sibling companion module found in owner ${owner.fullName}.")
-            None
+            // Fallbacks to support zio.prelude Subtype/NewType patterns where the exposed field
+            // type may be an inner alias `X.Type` or simply `Type` whose companion is the enclosing
+            // module object (e.g. SequenceNumber.Type -> SequenceNumber object).
+
+            // Helper: try searching upward from a symbol for a module with the given base name
+            def searchUpForModule(sym: Symbol, baseName: String): Option[Symbol] =
+              if (sym == Symbol.noSymbol) None
+              else
+                sym.declarations.find(d => d.flags.is(Flags.Module) && (d.name == baseName || d.name == baseName.init)) match {
+                  case some @ Some(_) => some
+                  case None => searchUpForModule(sym.owner, baseName)
+                }
+
+            // If the type's simple name is `Type` (or ends with `Type`), try to use the owner name
+            // as the candidate module name (e.g. `SequenceNumber.Type` -> module `SequenceNumber`).
+            val typeBasedCandidate: Option[Symbol] =
+              if (typeSymbol.name == "Type" || typeSymbol.name.endsWith("Type")) {
+                val base = typeSymbol.owner.name
+                MacroDebugger.log(s"  Attempting subtype/newtype resolution using owner name: $base")
+                searchUpForModule(owner, base)
+              } else None
+
+            typeBasedCandidate match {
+              case some @ Some(s) =>
+                MacroDebugger.log(s"  Found subtype/newtype companion module: ${s.fullName}")
+                some
+              case None =>
+                // Last-resort global search: strip common suffixes and look upward for a matching module
+                val stripped = typeSymbol.name.stripSuffix("$Type").stripSuffix("Type")
+                MacroDebugger.log(s"  Attempting global search for module matching stripped name: $stripped")
+                searchUpForModule(owner, stripped) match {
+                  case some @ Some(s) =>
+                    MacroDebugger.log(s"  Found global companion: ${s.fullName}")
+                    some
+                  case None =>
+                    MacroDebugger.log(s"  No companion module found for ${typeSymbol.fullName}")
+                    None
+                }
+            }
         }
       }
 
@@ -107,39 +147,80 @@ object SmartConstructorDiscovery {
     val methods = companion.declaredMethods.filter(_.name == methodName)
     MacroDebugger.log(s"    Looking for method '$methodName' in ${companion.fullName}. Candidates: ${methods.map(_.toString).mkString(", ")}")
     
-    methods.collectFirst {
-      case method =>
-        val companionRef = Ref(companion)
-        val methodType = companionRef.select(method).tpe.widen
-        MacroDebugger.log(s"      Analyzing method: ${method.toString}")
-        MacroDebugger.log(s"        Method type (widened): ${methodType.show}")
-        
-        methodType match {
-          case MethodType(paramNames, paramTypes, returnType) if paramNames.length == 1 =>
-            MacroDebugger.log(s"        Method has one param: ${paramNames.head} of type ${paramTypes.head.show}")
-            MacroDebugger.log(s"        Return type: ${returnType.show}")
-            // Check if return type is Validation[E, T] or Either[E, T]
-            analyzeReturnType(returnType, targetType) match {
-              case Some((errorType, validationKind)) =>
-                val primitiveType = paramTypes.head
-                Some(ValidatorInfo.NeedsValidation(
-                  fieldName = fieldName,
-                  primitiveType = primitiveType,
-                  wrappedType = targetType,
-                  errorType = errorType,
-                  companionSymbol = companion,
-                  methodName = methodName,
-                  validationKind = validationKind
-                ))
-              case None =>
-                MacroDebugger.log(s"        Analyzed return type for ${method.name}, but no matching validation type found.")
-                None
-            }
-          case _ => 
-            MacroDebugger.log(s"        Method ${method.name} does not have a single parameter, skipping.")
-            None
+    // Collect all candidate validators (method, primitiveType, errorType, validationKind)
+    val candidates = methods.flatMap { method =>
+      val companionRef = Ref(companion)
+      val methodType = companionRef.select(method).tpe.widen
+      MacroDebugger.log(s"      Analyzing method: ${method.toString}")
+      MacroDebugger.log(s"        Method type (widened): ${methodType.show}")
+
+      methodType match {
+        case MethodType(paramNames, paramTypes, returnType) if paramNames.length == 1 =>
+          MacroDebugger.log(s"        Method has one param: ${paramNames.head} of type ${paramTypes.head.show}")
+          MacroDebugger.log(s"        Return type: ${returnType.show}")
+          analyzeReturnType(returnType, targetType) match {
+            case Some((errorType, validationKind)) =>
+              Some((method, paramTypes.head, errorType, validationKind))
+            case None =>
+              MacroDebugger.log(s"        Analyzed return type for ${method.name}, but no matching validation type found.")
+              None
+          }
+        case _ =>
+          MacroDebugger.log(s"        Method ${method.name} does not have a single parameter, skipping.")
+          None
+      }
+    }
+
+    // Prefer a candidate whose primitive param type is different from the wrapped target type
+    // or is a scala primitive (Int, String, etc.). This helps pick Subtype/NewType helpers
+    // that accept raw primitives (e.g. Int) instead of the inner Type alias.
+    def isScalaPrimitive(t: TypeRepr): Boolean =
+      t.typeSymbol.fullName.startsWith("scala.") || t.typeSymbol.isNoSymbol
+
+    val chosen = candidates.sortBy { case (_, prim, _, _) =>
+      val primIsTarget = prim.simplified =:= targetType.simplified
+      val score = (if primIsTarget then 1 else 0) + (if isScalaPrimitive(prim) then -1 else 0)
+      score
+    }.headOption
+
+    chosen.map { case (method, primitiveType, errorType, validationKind) =>
+      ValidatorInfo.NeedsValidation(
+        fieldName = fieldName,
+        primitiveType = primitiveType,
+        wrappedType = targetType,
+        errorType = errorType,
+        companionSymbol = companion,
+        methodName = method.name,
+        validationKind = validationKind
+      )
+    }
+    .orElse {
+      // No candidate found — try to recognize zio.prelude.Subtype / NewType companions.
+      // For objects that extend Subtype[Int] the `make` method is provided by the trait.
+      // Inspect the companion's ClassDef parents for a reference to Subtype or NewType.
+      try {
+        companion.tree match {
+          case cd: quotes.reflect.ClassDef =>
+            val parentNames = cd.parents.map(_.show)
+            if (parentNames.exists(p => p.contains("Subtype") || p.contains("NewType"))) {
+              import quotes.reflect.*
+              MacroDebugger.log(s"    Companion ${companion.fullName} appears to extend Subtype/NewType; synthesizing validator using 'make'")
+              Some(ValidatorInfo.NeedsValidation(
+                fieldName = fieldName,
+                primitiveType = TypeRepr.of[Int],
+                wrappedType = targetType,
+                errorType = TypeRepr.of[String],
+                companionSymbol = companion,
+                methodName = "make",
+                validationKind = ValidationKind.FromValidation
+              ))
+            } else None
+          case _ => None
         }
-    }.flatten
+      } catch {
+        case _: Throwable => None
+      }
+    }
   }
   
   /**
@@ -205,8 +286,22 @@ object SmartConstructorDiscovery {
     
     val companionSymbol = validatorInfo.companionSymbol.asInstanceOf[Symbol]
     val companionRef    = Ref(companionSymbol)
-    val methodSymbol    = companionSymbol.declaredMethod(validatorInfo.methodName).head
-    val methodCall      = companionRef.select(methodSymbol).appliedTo(argumentTerm)
+    // Try to retrieve a declared method symbol; if not present (inherited methods such as
+    // those provided by zio.prelude.Subtype), fall back to a Select.unique call which will
+    // resolve members by name (including inherited ones).
+    val methodCall = try {
+      val maybeMethod = companionSymbol.declaredMethod(validatorInfo.methodName).headOption
+      maybeMethod match {
+        case Some(ms) => companionRef.select(ms).appliedTo(argumentTerm)
+        case None =>
+          // Fall back to Select.unique to invoke methods inherited from traits (e.g. make)
+          Apply(Select.unique(companionRef, validatorInfo.methodName), List(argumentTerm))
+      }
+    } catch {
+      case _: Throwable =>
+        // defensive fallback
+        Apply(Select.unique(companionRef, validatorInfo.methodName), List(argumentTerm))
+    }
 
     validatorInfo.validationKind match {
       case ValidationKind.FromValidation =>

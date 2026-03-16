@@ -58,6 +58,23 @@ lazy val removeFix = project
   )
   .dependsOn(simpleBuilders)
 
+// JMH microbenchmarks project
+lazy val jmh = project
+  .in(file("jmh"))
+  .enablePlugins(JmhPlugin)
+  .settings(
+    name := "builders-jmh",
+    // ensure same Scala version; ThisBuild already sets it but be explicit
+    scalaVersion := "3.7.4",
+    // Fork JVM for stable JMH runs
+    Compile / fork := true,
+    // Reasonable JVM options for benchmarking
+    Compile / javaOptions ++= Seq("-Xms1G", "-Xmx2G", "-XX:+UseG1GC"),
+    // Optional: set default jmh options when running via sbt (warmups, iters)
+    // import sbtjmh.JmhPlugin.autoImport._ is not required here; users can pass args to jmh:run
+  )
+  .dependsOn(withPrelude, simpleBuilders)
+
 // Add minimal GitHub Packages publishing configuration.
 // It reads repository and credentials from environment variables provided by GitHub Actions
 // (GITHUB_REPOSITORY, GITHUB_ACTOR, GITHUB_TOKEN). When running locally, set these env vars
