@@ -40,7 +40,102 @@ object SmartConstructorDiscovery {
     import quotes.reflect.*
     
     val typeSymbol = fieldType.typeSymbol
-    
+    // Skip searching companion for plain Scala primitive/standard types — they don't have smart constructors.
+    try {
+      if (typeSymbol.fullName.startsWith("scala.")) {
+        MacroDebugger.log(s"Primitive/standard scala type detected (${typeSymbol.fullName}) — skipping companion lookup for $fieldName")
+        return ValidatorInfo.NoValidation(fieldName, fieldType)
+      }
+      if (typeSymbol.fullName.startsWith("java.")) {
+        MacroDebugger.log(s"Java standard type detected (${typeSymbol.fullName}) — treating as no-validation for $fieldName")
+        return ValidatorInfo.NoValidation(fieldName, fieldType)
+      }
+    } catch { case _: Throwable => () }
+
+    // If the dealiased type symbol is an inner `Type` alias (e.g. SequenceNumber.Type),
+    // prefer the owner module as the companion (zio.prelude Newtype/Subtype pattern).
+    try {
+      val dealiased = fieldType.widen.dealias
+      val dSym = dealiased.typeSymbol
+      if (dSym != Symbol.noSymbol && dSym.name == "Type") {
+        // Try to extract the concrete owner module from the dealiased type's show string.
+        // e.g. "playground.Opaque.SequenceNumber.Type" -> ownerName = "playground.Opaque.SequenceNumber"
+        val ftShow = try fieldType.widen.dealias.show catch { case _: Throwable => "" }
+        val ownerCandidateOpt: Option[quotes.reflect.Symbol] = try {
+          val idx = ftShow.lastIndexOf(".Type")
+          if (idx > 0) {
+            val ownerName = ftShow.substring(0, idx)
+            // Try requiredModule on a few variants
+            val variants = List(ownerName, ownerName + "$", ownerName.replace("$.", "."), ownerName.replace("$.", ".") + "$")
+            variants.view.flatMap { name =>
+              try {
+                val m = quotes.reflect.Symbol.requiredModule(name)
+                if (m != quotes.reflect.Symbol.noSymbol) Some(m) else None
+              } catch { case _: Throwable => None }
+            }.headOption
+          } else None
+        } catch { case _: Throwable => None }
+
+        val moduleCandidate = ownerCandidateOpt.getOrElse {
+          // Fallback to previous behavior: use the owner symbol (may be the abstract Subtype/Newtype class)
+          val owner = dSym.owner
+          try {
+            if (owner.flags.is(Flags.Module)) owner
+            else if (owner.companionModule.exists) owner.companionModule
+            else owner
+          } catch { case _: Throwable => owner }
+        }
+        MacroDebugger.log(s"Detected wrapped alias Type; using companion candidate ${moduleCandidate.fullName} for field $fieldName (original dealiased show: ${ftShow})")
+        try { report.info(s"SmartConstructorDiscovery: wrapper Type detected; companionCandidate=${moduleCandidate.fullName} for field=$fieldName") } catch { case _: Throwable => () }
+        val found = findValidationMethod(moduleCandidate, fieldType, fieldName)
+        if (found.isDefined) return found.get
+        // findValidationMethod failed — this can happen for locally-defined Newtype/Subtype where
+        // 'make' is inherited and not discoverable via declaredMethods.
+        // Last resort: try to build NeedsValidation by probing Select.unique for 'make' directly.
+        val localFallback: Option[ValidatorInfo.NeedsValidation] = try {
+          // Resolve the primitive type from the Newtype base: Newtype[A] → A
+          val primTpe: TypeRepr = try {
+            // Try to extract from moduleClass baseTypes looking for NewtypeCustom[A]
+            val mc = try if (moduleCandidate.moduleClass.exists) moduleCandidate.moduleClass else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
+            val baseTs = try if (mc != Symbol.noSymbol) mc.typeRef.baseClasses else List.empty catch { case _: Throwable => List.empty }
+            baseTs.view.flatMap { bc =>
+              try {
+                val bcTpe = bc.typeRef
+                bcTpe.baseType(Symbol.requiredClass("zio.prelude.NewtypeCustom")) match {
+                  case AppliedType(_, List(a)) => Some(a)
+                  case _ => None
+                }
+              } catch { case _: Throwable => None }
+            }.headOption.getOrElse(TypeRepr.of[Any])
+          } catch { case _: Throwable => TypeRepr.of[Any] }
+
+          val modRef = Ref(moduleCandidate)
+          val makeSelect = Select.unique(modRef, "make")
+          val makeTpe = makeSelect.tpe.widen.dealias
+          makeTpe match {
+            case mt: MethodType =>
+              val paramTpe = mt.paramTypes.headOption.getOrElse(primTpe)
+              analyzeReturnType(mt.resType, fieldType) match {
+                case Some((errTpe, vk)) =>
+                  Some(ValidatorInfo.NeedsValidation(fieldName, paramTpe, fieldType, errTpe, api.MacroUtils.toTermModule(moduleCandidate), "make", vk))
+                case None => None
+              }
+            case PolyType(_, _, result) =>
+              analyzeReturnType(result.dealias, fieldType) match {
+                case Some((errTpe, vk)) =>
+                  Some(ValidatorInfo.NeedsValidation(fieldName, primTpe, fieldType, errTpe, api.MacroUtils.toTermModule(moduleCandidate), "make", vk))
+                case None => None
+              }
+            case _ => None
+          }
+        } catch { case ex: Throwable =>
+          MacroDebugger.log(s"  Local Newtype fallback also failed for $fieldName: ${ex.getMessage}")
+          None
+        }
+        return localFallback.getOrElse(ValidatorInfo.NoValidation(fieldName, fieldType))
+      }
+    } catch { case _: Throwable => () }
+
     MacroDebugger.log(s"Discovering validator for field '$fieldName' of type ${fieldType.show}")
     MacroDebugger.log(s"  Type symbol: ${typeSymbol.fullName}")
 
@@ -65,13 +160,32 @@ object SmartConstructorDiscovery {
             // module object (e.g. SequenceNumber.Type -> SequenceNumber object).
 
             // Helper: try searching upward from a symbol for a module with the given base name
-            def searchUpForModule(sym: Symbol, baseName: String): Option[Symbol] =
+            // This is tolerant to compiler-generated prefixes (e.g. "_$TestNew") and
+            // tries to match by simple name or by fullName suffix.
+            def searchUpForModule(sym: Symbol, baseName: String): Option[Symbol] = {
               if (sym == Symbol.noSymbol) None
-              else
-                sym.declarations.find(d => d.flags.is(Flags.Module) && (d.name == baseName || d.name == baseName.init)) match {
-                  case some @ Some(_) => some
-                  case None => searchUpForModule(sym.owner, baseName)
+              else {
+                val stripped = baseName.stripPrefix("_$").stripSuffix("$Type").stripSuffix("Type")
+                val candidates = sym.declarations.collect {
+                  case d if d.flags.is(Flags.Module) => d
                 }
+                // Try exact matches first
+                candidates.find(d => d.name == baseName || d.name == baseName.init) match {
+                  case some @ Some(_) => some
+                  case None =>
+                    // Try stripped/simple matches
+                    candidates.find(d => d.name == stripped || d.name == stripped.init) match {
+                      case some @ Some(_) => some
+                      case None =>
+                        // Try matching by fullName suffix (handles nested/local modules)
+                        candidates.find(d => d.fullName.endsWith("." + stripped) || d.fullName.endsWith("$" + stripped)) match {
+                          case some @ Some(_) => some
+                          case None => searchUpForModule(sym.owner, baseName)
+                        }
+                    }
+                }
+              }
+            }
 
             // If the type's simple name is `Type` (or ends with `Type`), try to use the owner name
             // as the candidate module name (e.g. `SequenceNumber.Type` -> module `SequenceNumber`).
@@ -95,31 +209,72 @@ object SmartConstructorDiscovery {
                     MacroDebugger.log(s"  Found global companion: ${s.fullName}")
                     some
                   case None =>
-                    MacroDebugger.log(s"  No companion module found for ${typeSymbol.fullName}")
-                    None
+                    MacroDebugger.log(s"  No companion module found for ${typeSymbol.fullName}; trying requiredModule fallbacks")
+                    // Try a few possible full-name candidates for local/test-defined modules
+                    val candidates = List(
+                      typeSymbol.fullName + "$",
+                      typeSymbol.owner.fullName + ".$" + typeSymbol.name,
+                      typeSymbol.owner.fullName + ".$" + typeSymbol.name + "$",
+                      typeSymbol.owner.fullName + "." + typeSymbol.name,
+                      typeSymbol.owner.fullName + "." + typeSymbol.name + "$"
+                    ).distinct
+                    val found = candidates.view.flatMap { fn =>
+                      try {
+                        val mod = quotes.reflect.Symbol.requiredModule(fn)
+                        MacroDebugger.log(s"  requiredModule resolved: $fn -> ${mod.fullName}")
+                        Some(mod)
+                      } catch { case _: Throwable =>
+                        MacroDebugger.log(s"  requiredModule failed: $fn")
+                        None
+                      }
+                    }.headOption
+                    found.orElse {
+                      MacroDebugger.log(s"  All requiredModule fallbacks failed for ${typeSymbol.fullName}")
+                      None
+                    }
                 }
             }
         }
       }
 
     companionOpt match {
-      case Some(companion) =>
-        findValidationMethod(companion, fieldType, fieldName) match {
+      case Some(rawCompanion) =>
+        // Normalize to module (object) symbol if possible. Many of our lookups
+        // require the module symbol so methods declared on the object (or inherited)
+        // are visible.
+        val companionModule: Symbol = try {
+          if (rawCompanion.flags.is(Flags.Module)) rawCompanion
+          else if (rawCompanion.companionModule.exists) rawCompanion.companionModule
+          else rawCompanion
+        } catch { case _: Throwable => rawCompanion }
+
+        MacroDebugger.log(s"  Using companion module: ${companionModule.fullName}")
+        try {
+          report.info(s"SmartConstructorDiscovery: using companion module ${companionModule.fullName} for field ${fieldName}")
+        } catch { case _: Throwable => () }
+        findValidationMethod(companionModule, fieldType, fieldName) match {
           case Some(info) =>
             MacroDebugger.log(s"  Found validation for $fieldName: ${info.methodName}")
+            try { report.info(s"SmartConstructorDiscovery: found validation for ${fieldName}; method=${info.methodName}") } catch { case _: Throwable => () }
             info
           case None =>
-            MacroDebugger.log(s"  No validation method found in companion '${companion.fullName}' for $fieldName")
+            MacroDebugger.log(s"  No validation method found in companion '${companionModule.fullName}' for $fieldName")
             ValidatorInfo.NoValidation(fieldName, fieldType)
         }
       case None =>
         MacroDebugger.log(s"  No companion object could be resolved for $fieldName.")
+        try { report.info(s"SmartConstructorDiscovery: no companion object for ${fieldName} (${fieldType.show})") } catch { case _: Throwable => () }
         ValidatorInfo.NoValidation(fieldName, fieldType)
     }
   }
   
   /**
    * Tries to find a suitable validation method in the companion object.
+   *
+   * Strategy:
+   *  1. Try `apply` on the DIRECT companion only (not zio.prelude base classes) — handles opaque types.
+   *  2. Try `make` on all candidates including zio.prelude bases — handles Newtype/Subtype.
+   *  3. Try `apply` on all candidates — broader fallback.
    */
   private def findValidationMethod(using Quotes)(
     companion: quotes.reflect.Symbol,
@@ -127,102 +282,148 @@ object SmartConstructorDiscovery {
     fieldName: String
   ): Option[ValidatorInfo.NeedsValidation] = {
     import quotes.reflect.*
-    
-    // Try apply method first, then make
-    findMethodValidation(companion, "apply", targetType, fieldName)
-      .orElse(findMethodValidation(companion, "make", targetType, fieldName))
+
+    // Step 1: `apply` on the direct companion only (no zio.prelude base injection)
+    val directApply = findMethodValidation(companion, "apply", targetType, fieldName, directOnly = true)
+    if (directApply.isDefined) return directApply
+
+    // Step 2: `make` on all candidates (including zio.prelude bases) — for Newtype/Subtype
+    val makeResult = findMethodValidation(companion, "make", targetType, fieldName, directOnly = false)
+    if (makeResult.isDefined) return makeResult
+
+    // Step 3: `apply` on all candidates — broader fallback
+    findMethodValidation(companion, "apply", targetType, fieldName, directOnly = false)
   }
   
   /**
    * Looks for a method (apply or make) returning Validation or Either.
+   * @param directOnly if true, only look at the companion itself (+ its moduleClass/requiredModule variants)
+   *                   but NOT zio.prelude base-class candidates.  This avoids opaque-type `apply`
+   *                   accidentally matching an inherited `make` from Newtype/Subtype bases.
    */
   private def findMethodValidation(using Quotes)(
-    companion: quotes.reflect.Symbol,
-    methodName: String,
-    targetType: quotes.reflect.TypeRepr,
-    fieldName: String
-  ): Option[ValidatorInfo.NeedsValidation] = {
-    import quotes.reflect.*
-    
-    val methods = companion.declaredMethods.filter(_.name == methodName)
-    MacroDebugger.log(s"    Looking for method '$methodName' in ${companion.fullName}. Candidates: ${methods.map(_.toString).mkString(", ")}")
-    
-    // Collect all candidate validators (method, primitiveType, errorType, validationKind)
-    val candidates = methods.flatMap { method =>
-      val companionRef = Ref(companion)
-      val methodType = companionRef.select(method).tpe.widen
-      MacroDebugger.log(s"      Analyzing method: ${method.toString}")
-      MacroDebugger.log(s"        Method type (widened): ${methodType.show}")
+     companion: quotes.reflect.Symbol,
+     methodName: String,
+     targetType: quotes.reflect.TypeRepr,
+     fieldName: String,
+     directOnly: Boolean = false
+   ): Option[ValidatorInfo.NeedsValidation] = {
+     import quotes.reflect.*
 
-      methodType match {
-        case MethodType(paramNames, paramTypes, returnType) if paramNames.length == 1 =>
-          MacroDebugger.log(s"        Method has one param: ${paramNames.head} of type ${paramTypes.head.show}")
-          MacroDebugger.log(s"        Return type: ${returnType.show}")
-          analyzeReturnType(returnType, targetType) match {
-            case Some((errorType, validationKind)) =>
-              Some((method, paramTypes.head, errorType, validationKind))
-            case None =>
-              MacroDebugger.log(s"        Analyzed return type for ${method.name}, but no matching validation type found.")
-              None
-          }
-        case _ =>
-          MacroDebugger.log(s"        Method ${method.name} does not have a single parameter, skipping.")
-          None
-      }
-    }
+      // Build an expanded set of candidate symbols to inspect:
+      // - the companion object symbol
+      // - its moduleClass
+      // - its companionModule (if any)
+      // - requiredModule fallbacks for possible naming variants
+      // - known zio.prelude base classes and their companion/module variants (only when !directOnly)
+      val candSyms = scala.collection.mutable.ListBuffer[Symbol]()
+      def addIfValid(s: Symbol): Unit = if (s != null && s != Symbol.noSymbol) candSyms += s
 
-    // Prefer a candidate whose primitive param type is different from the wrapped target type
-    // or is a scala primitive (Int, String, etc.). This helps pick Subtype/NewType helpers
-    // that accept raw primitives (e.g. Int) instead of the inner Type alias.
-    def isScalaPrimitive(t: TypeRepr): Boolean =
-      t.typeSymbol.fullName.startsWith("scala.") || t.typeSymbol.isNoSymbol
+      addIfValid(companion)
+      try addIfValid(companion.moduleClass) catch { case _: Throwable => () }
+      try addIfValid(companion.companionModule) catch { case _: Throwable => () }
 
-    val chosen = candidates.sortBy { case (_, prim, _, _) =>
-      val primIsTarget = prim.simplified =:= targetType.simplified
-      val score = (if primIsTarget then 1 else 0) + (if isScalaPrimitive(prim) then -1 else 0)
-      score
-    }.headOption
-
-    chosen.map { case (method, primitiveType, errorType, validationKind) =>
-      ValidatorInfo.NeedsValidation(
-        fieldName = fieldName,
-        primitiveType = primitiveType,
-        wrappedType = targetType,
-        errorType = errorType,
-        companionSymbol = companion,
-        methodName = method.name,
-        validationKind = validationKind
-      )
-    }
-    .orElse {
-      // No candidate found — try to recognize zio.prelude.Subtype / NewType companions.
-      // For objects that extend Subtype[Int] the `make` method is provided by the trait.
-      // Inspect the companion's ClassDef parents for a reference to Subtype or NewType.
+      // requiredModule fallbacks for companion fullName
       try {
-        companion.tree match {
-          case cd: quotes.reflect.ClassDef =>
-            val parentNames = cd.parents.map(_.show)
-            if (parentNames.exists(p => p.contains("Subtype") || p.contains("NewType"))) {
-              import quotes.reflect.*
-              MacroDebugger.log(s"    Companion ${companion.fullName} appears to extend Subtype/NewType; synthesizing validator using 'make'")
-              Some(ValidatorInfo.NeedsValidation(
-                fieldName = fieldName,
-                primitiveType = TypeRepr.of[Int],
-                wrappedType = targetType,
-                errorType = TypeRepr.of[String],
-                companionSymbol = companion,
-                methodName = "make",
-                validationKind = ValidationKind.FromValidation
-              ))
-            } else None
-          case _ => None
+        val fn = companion.fullName
+        List(fn, fn.stripSuffix("$"), fn + "$", fn.replace("$.", ".")).distinct.foreach { name =>
+          try addIfValid(Symbol.requiredModule(name)) catch { case _: Throwable => () }
         }
-      } catch {
-        case _: Throwable => None
+      } catch { case _: Throwable => () }
+
+      // Known zio.prelude bases — only added when directOnly=false (broader search)
+      if (!directOnly) {
+        List("zio.prelude.Subtype", "zio.prelude.Newtype", "zio.prelude.SubtypeCustom", "zio.prelude.NewtypeCustom").foreach { bn =>
+          try {
+            val bs = Symbol.requiredClass(bn)
+            addIfValid(bs)
+            try addIfValid(bs.companionModule) catch { case _: Throwable => () }
+            try addIfValid(bs.moduleClass) catch { case _: Throwable => () }
+          } catch { case _: Throwable => () }
+        }
       }
-    }
+
+      val candidates = candSyms.toList.distinct
+
+      def inspectOn(sym: Symbol, name: String, fallbackPrim: TypeRepr, declaredOnly: Boolean = false): Option[ValidatorInfo.NeedsValidation] = {
+        try {
+          val methodsObj = try sym.declaredMethods.filter(_.name == name) catch { case _: Throwable => List.empty }
+          val methodsClass = try if (sym.moduleClass.exists) sym.moduleClass.declaredMethods.filter(_.name == name) else List.empty catch { case _: Throwable => List.empty }
+          val methodsAll = (methodsObj ++ methodsClass).distinct
+          val fromDeclared = methodsAll.flatMap { method =>
+            try {
+              val compRef = Ref(sym)
+              val sel = Select.unique(compRef, method.name)
+              val mTpe = sel.tpe.widen.dealias
+              mTpe match {
+                case mt: MethodType =>
+                  val paramTpe = mt.paramTypes.headOption.getOrElse(fallbackPrim)
+                  val returnTpe = mt.resType
+                  analyzeReturnType(returnTpe, targetType) match {
+                    case Some((errTpe, vk)) =>
+                      // Use the method's owner symbol as the companion symbol, normalized to a term module
+                      val ownerSym = try method.owner catch { case _: Throwable => sym }
+                      val companionSym = try {
+                        if (ownerSym.flags.is(Flags.Module)) ownerSym
+                        else if (ownerSym.companionModule.exists) ownerSym.companionModule
+                        else sym
+                      } catch { case _: Throwable => sym }
+                      Some(ValidatorInfo.NeedsValidation(fieldName, paramTpe, targetType, errTpe, api.MacroUtils.toTermModule(companionSym), method.name, vk))
+                    case None => None
+                  }
+                case PolyType(_, _, result) =>
+                  analyzeReturnType(result.dealias, targetType) match {
+                    case Some((errTpe, vk)) =>
+                      val ownerSym = try method.owner catch { case _: Throwable => sym }
+                      val companionSym = try {
+                        if (ownerSym.flags.is(Flags.Module)) ownerSym
+                        else if (ownerSym.companionModule.exists) ownerSym.companionModule
+                        else sym
+                      } catch { case _: Throwable => sym }
+                      Some(ValidatorInfo.NeedsValidation(fieldName, fallbackPrim, targetType, errTpe, api.MacroUtils.toTermModule(companionSym), method.name, vk))
+                    case None => None
+                  }
+                case _ => None
+              }
+            } catch { case _: Throwable => None }
+          }.headOption
+          // If nothing found among declared methods, attempt a Select.unique(ref, name)
+          // BUT only when declaredOnly=false — when true, we intentionally skip inherited methods
+          // (e.g. to avoid picking up inherited `apply` from Newtype/Subtype base classes).
+          if (declaredOnly) fromDeclared
+          else fromDeclared.orElse {
+            try {
+              val compRef = Ref(sym)
+              val sel = Select.unique(compRef, name)
+              val mTpe = sel.tpe.widen.dealias
+              mTpe match {
+                case mt: MethodType =>
+                  val paramTpe = mt.paramTypes.headOption.getOrElse(fallbackPrim)
+                  val returnTpe = mt.resType
+                  analyzeReturnType(returnTpe, targetType) match {
+                    case Some((errTpe, vk)) =>
+                      Some(ValidatorInfo.NeedsValidation(fieldName, paramTpe, targetType, errTpe, api.MacroUtils.toTermModule(sym), name, vk))
+                    case None => None
+                  }
+                case PolyType(_, _, result) =>
+                  analyzeReturnType(result.dealias, targetType) match {
+                    case Some((errTpe, vk)) => Some(ValidatorInfo.NeedsValidation(fieldName, fallbackPrim, targetType, errTpe, api.MacroUtils.toTermModule(sym), name, vk))
+                    case None => None
+                  }
+                case _ => None
+              }
+            } catch { case _: Throwable => None }
+          }
+        } catch { case _: Throwable => None }
+      }
+
+    // Search all candidates for the requested method name.
+    // When directOnly=true we skip inherited (Select.unique) fallback to avoid picking up
+    // inherited methods from zio.prelude bases on the module under test.
+      val result = candidates.view.flatMap(sym => inspectOn(sym, methodName, TypeRepr.of[Any], declaredOnly = directOnly)).headOption
+      result
   }
-  
+
   /**
    * Analyzes a return type to see if it's Validation[E, T] or Either[E, T].
    * Returns Some((errorType, validationKind)) if valid, None otherwise.
@@ -238,38 +439,76 @@ object SmartConstructorDiscovery {
     MacroDebugger.log(s"          Analyzing return type: ${returnType.show}")
     MacroDebugger.log(s"          Expected wrapped type: ${expectedWrappedType.show}")
     
-    returnType match {
-      // Match ZValidation[W, E, T] or Validation[E, T] alias (which is ZValidation[Nothing, E, T])
-      case AppliedType(tycon, List(logType, errorType, wrappedType)) 
-        if tycon.typeSymbol.fullName == "zio.prelude.ZValidation" || tycon.typeSymbol.fullName == "zio.prelude.Validation" =>
-        MacroDebugger.log(s"            Return type is ZValidation/Validation. Wrapped: ${wrappedType.show}")
-        // Check if wrappedType matches our expected type (allowing for opaque type equality)
-        if (wrappedType.simplified =:= expectedWrappedType.simplified) {
-          MacroDebugger.log(s"            SUCCESS: Found Validation with matching simplified wrapped type: ${wrappedType.simplified.show}")
-          Some((errorType, ValidationKind.FromValidation))
+    val rt = returnType.widen.dealias
+    MacroDebugger.log(s"          Dealiased return type: ${rt.show}")
+    rt match {
+      case AppliedType(tycon, args) if args.nonEmpty =>
+        val tcName = tycon.typeSymbol.fullName
+        val tcSimple = tycon.typeSymbol.name
+        MacroDebugger.log(s"            Tycon: $tcName / $tcSimple ; args=${args.map(_.show).mkString(",")}")
+        if (tcName.contains("ZValidation") || tcSimple.contains("ZValidation")) {
+          // ZValidation[log, err, wrapped]
+          args match {
+            case List(_, errorType, wrappedType) =>
+              val wrappedS = wrappedType.simplified
+              val expectedS = expectedWrappedType.simplified
+              // ownerMatch: supports patterns like SequenceNumber.Type where the wrapped type is an inner Type alias
+              val ownerMatch = wrappedS.typeSymbol.name == "Type" && (
+                wrappedS.typeSymbol.owner == expectedS.typeSymbol ||
+                wrappedS.typeSymbol.owner == expectedS.dealias.typeSymbol ||
+                wrappedS.typeSymbol.owner.name == expectedS.typeSymbol.name ||
+                wrappedS.typeSymbol.owner.name == expectedS.dealias.typeSymbol.name
+              )
+              if (wrappedS =:= expectedS || ownerMatch || wrappedS.widen.dealias =:= expectedS.widen.dealias) {
+                MacroDebugger.log(s"            SUCCESS: Found ZValidation with matching wrapped type: ${wrappedS.show}")
+                Some((errorType, ValidationKind.FromValidation))
+              } else {
+                MacroDebugger.log(s"            FAILURE: ZValidation wrapped type ${wrappedType.show} does not match expected ${expectedWrappedType.show}")
+                None
+              }
+            case _ => None
+          }
+        } else if (tcName.contains("Validation") || tcSimple.contains("Validation")) {
+          // Validation[E, T] alias
+          args match {
+            case List(errorType, wrappedType) =>
+              val wrappedS = wrappedType.simplified
+              val expectedS = expectedWrappedType.simplified
+              val ownerMatch = wrappedS.typeSymbol.name == "Type" && (
+                wrappedS.typeSymbol.owner == expectedS.typeSymbol ||
+                wrappedS.typeSymbol.owner == expectedS.dealias.typeSymbol ||
+                wrappedS.typeSymbol.owner.name == expectedS.typeSymbol.name ||
+                wrappedS.typeSymbol.owner.name == expectedS.dealias.typeSymbol.name
+              )
+              if (wrappedS =:= expectedS || ownerMatch || wrappedS.widen.dealias =:= expectedS.widen.dealias) {
+                MacroDebugger.log(s"            SUCCESS: Found Validation alias with matching wrapped type: ${wrappedS.show}")
+                Some((errorType, ValidationKind.FromValidation))
+              } else {
+                MacroDebugger.log(s"            FAILURE: Validation alias wrapped type ${wrappedType.show} does not match expected ${expectedWrappedType.show}")
+                None
+              }
+            case _ => None
+          }
+        } else if (tcName == "scala.util.Either" || tcSimple == "Either") {
+          args match {
+            case List(errorType, wrappedType) =>
+              val wrappedS = wrappedType.simplified
+              val expectedS = expectedWrappedType.simplified
+              if (wrappedS =:= expectedS || wrappedS.widen.dealias =:= expectedS.widen.dealias) {
+                MacroDebugger.log(s"            SUCCESS: Found Either with matching simplified wrapped type: ${wrappedS.show}")
+                Some((errorType, ValidationKind.FromEither))
+              } else {
+                MacroDebugger.log(s"            FAILURE: Either wrapped type ${wrappedType.show} does not match expected ${expectedWrappedType.show}")
+                None
+              }
+            case _ => None
+          }
         } else {
-          MacroDebugger.log(s"            FAILURE: ZValidation wrapped type ${wrappedType.show} does not match expected ${expectedWrappedType.show}")
-          MacroDebugger.log(s"            ... simplified wrapped: ${wrappedType.simplified.show} (fullName: ${if wrappedType.simplified.typeSymbol.isNoSymbol then "NoSymbol" else wrappedType.simplified.typeSymbol.fullName})")
-          MacroDebugger.log(s"            ... simplified expected: ${expectedWrappedType.simplified.show} (fullName: ${expectedWrappedType.simplified.typeSymbol.fullName})")
+          MacroDebugger.log(s"          Return tycon not recognized as Validation/Either: ${tycon.typeSymbol.fullName}")
           None
         }
-      
-      // Match Either[E, T]
-      case AppliedType(tycon, List(errorType, wrappedType))
-        if tycon.typeSymbol.fullName == "scala.util.Either" =>
-        MacroDebugger.log(s"            Return type is Either. Wrapped: ${wrappedType.show}")
-        if (wrappedType.simplified =:= expectedWrappedType.simplified) {
-          MacroDebugger.log(s"            SUCCESS: Found Either with matching simplified wrapped type: ${wrappedType.simplified.show}")
-          Some((errorType, ValidationKind.FromEither))
-        } else {
-          MacroDebugger.log(s"            FAILURE: Either wrapped type ${wrappedType.show} does not match expected ${expectedWrappedType.show}")
-          MacroDebugger.log(s"            ... simplified wrapped: ${wrappedType.simplified.show} (fullName: ${if wrappedType.simplified.typeSymbol.isNoSymbol then "NoSymbol" else wrappedType.simplified.typeSymbol.fullName})")
-          MacroDebugger.log(s"            ... simplified expected: ${expectedWrappedType.simplified.show} (fullName: ${expectedWrappedType.simplified.typeSymbol.fullName})")
-          None
-        }
-      
-      case other => 
-        MacroDebugger.log(s"          Return type is not a known validation type: ${other.show}")
+      case other =>
+        MacroDebugger.log(s"          Return type is not an AppliedType recognized as validation: ${other.show}")
         None
     }
   }
@@ -279,65 +518,105 @@ object SmartConstructorDiscovery {
    * This generates the actual validation call at macro expansion time.
    */
   def createValidationCall(using Quotes)(
-    validatorInfo: ValidatorInfo.NeedsValidation,
-    argumentTerm: quotes.reflect.Term
-  ): quotes.reflect.Term = {
-    import quotes.reflect.*
-    
-    val companionSymbol = validatorInfo.companionSymbol.asInstanceOf[Symbol]
-    val companionRef    = Ref(companionSymbol)
-    // Try to retrieve a declared method symbol; if not present (inherited methods such as
-    // those provided by zio.prelude.Subtype), fall back to a Select.unique call which will
-    // resolve members by name (including inherited ones).
-    val methodCall = try {
-      val maybeMethod = companionSymbol.declaredMethod(validatorInfo.methodName).headOption
-      maybeMethod match {
-        case Some(ms) => companionRef.select(ms).appliedTo(argumentTerm)
-        case None =>
-          // Fall back to Select.unique to invoke methods inherited from traits (e.g. make)
-          Apply(Select.unique(companionRef, validatorInfo.methodName), List(argumentTerm))
+     validatorInfo: ValidatorInfo.NeedsValidation,
+     argumentTerm: quotes.reflect.Term
+   ): quotes.reflect.Term = {
+     import quotes.reflect.*
+
+      val nv = validatorInfo
+      val primMethodName = nv.methodName
+
+      def tryMethodOn(sym: Symbol): Option[quotes.reflect.Term] = {
+        import quotes.reflect.*
+        try {
+          val mod = api.MacroUtils.toModule(sym)
+          // Use Select.unique on the term module symbol — this will resolve methods defined on the module or inherited from its moduleClass.
+          Some(Apply(Select.unique(Ref(mod), primMethodName), List(argumentTerm)))
+        } catch { case _: Throwable => None }
       }
-    } catch {
-      case _: Throwable =>
-        // defensive fallback
-        Apply(Select.unique(companionRef, validatorInfo.methodName), List(argumentTerm))
-    }
 
-    validatorInfo.validationKind match {
-      case ValidationKind.FromValidation =>
-        // Smart constructor already returns Validation[E, A]
-        // which is a type alias for ZValidation[Nothing, E, A]. Use as-is.
-        methodCall
-        
-      case ValidationKind.FromEither =>
-        // Smart constructor returns Either[E, A]; convert to Validation[E, A]
-        // Validation[E, A] is an alias for ZValidation[Nothing, E, A]
-        val validationType   = TypeRepr.of[zio.prelude.Validation.type]
-        val validationComp   = validationType.typeSymbol.companionModule
-        val validationRef    = Ref(validationComp)
-        val fromEitherOpt    = validationComp.declaredMethods.find(_.name == "fromEither")
-        val fromEitherMethod = fromEitherOpt.getOrElse {
-          report.errorAndAbort("Could not find zio.prelude.Validation.fromEither")
+      // Build candidate symbols to try (prefer what was discovered, then wrappedType owner, then requiredModule fallbacks)
+      val candidates: List[Symbol] = try {
+        val discovered = nv.companionSymbol.asInstanceOf[quotes.reflect.Symbol]
+        val wrappedOwner = try nv.wrappedType.asInstanceOf[quotes.reflect.TypeRepr].typeSymbol.owner catch { case _: Throwable => Symbol.noSymbol }
+        val extra = List(discovered, discovered.moduleClass, wrappedOwner, wrappedOwner.moduleClass).filter(s => s != null && s != Symbol.noSymbol).distinct
+        // also attempt requiredModule resolutions for owner.fullName if available
+        val reqs = try {
+          val wn = wrappedOwner.fullName
+          List(
+            try Symbol.requiredModule(wn) catch { case _: Throwable => Symbol.noSymbol },
+            try Symbol.requiredModule(wn + "$") catch { case _: Throwable => Symbol.noSymbol }
+          )
+        } catch { case _: Throwable => List.empty }
+        (extra ++ reqs).filter(_ != Symbol.noSymbol).distinct
+      } catch { case _: Throwable => List.empty }
+
+      val methodCallOpt = candidates.view.flatMap(tryMethodOn).headOption
+      val methodCall = methodCallOpt.getOrElse {
+        import quotes.reflect.*
+        // Normalize the stored companion symbol to a term module symbol if possible
+        val compRaw = try nv.companionSymbol.asInstanceOf[quotes.reflect.Symbol] catch { case _: Throwable => Symbol.noSymbol }
+        val compModule = if (compRaw != Symbol.noSymbol) api.MacroUtils.toTermModule(compRaw) else Symbol.noSymbol
+
+        // Defensive: only emit a direct method call if the companion/module actually exposes the method
+        def methodExistsOn(sym: Symbol, name: String): Boolean = {
+          try {
+            val methodsObj = sym.declaredMethods.map(_.name)
+            val classMethods = try if (sym.moduleClass.exists) sym.moduleClass.declaredMethods.map(_.name) else List.empty catch { case _: Throwable => List.empty }
+            (methodsObj ++ classMethods).contains(name)
+          } catch { case _: Throwable => false }
         }
 
-        // Extract E and A from Either[E, A]
-        val eitherType = methodCall.tpe.widen.dealias
-        val (errorType, resultType) = eitherType match {
-          case AppliedType(_, List(e, a)) => (e, a)
-          case other =>
-            report.errorAndAbort(
-              s"Expected Either[E, A] return type for validation method, but found: ${other.show}"
-            )
+        if (compModule != Symbol.noSymbol && methodExistsOn(compModule, primMethodName)) {
+          try {
+            val compTerm = compModule
+            Apply(Select.unique(Ref(compTerm), primMethodName), List(argumentTerm))
+          } catch { case _: Throwable =>
+            // fallback to select unique on the raw companion if it somehow works
+            try Apply(Select.unique(Ref(compRaw), primMethodName), List(argumentTerm)) catch { case _: Throwable => createSucceedCall(argumentTerm) }
+          }
+        } else {
+          // If we can't find a method, don't emit an invalid call; treat as successful pass-through
+          MacroDebugger.log(s"createValidationCall: no method '$primMethodName' found on companion for validator; returning succeed for argument.")
+          createSucceedCall(argumentTerm)
         }
+     }
 
-        // Call Validation.fromEither[E, A](eitherValue): Validation[E, A]
-        validationRef
-          .select(fromEitherMethod)
-          .appliedToTypes(List(errorType, resultType))
-          .appliedTo(methodCall)
-    }
-  }
-  
+     validatorInfo.validationKind match {
+       case ValidationKind.FromValidation =>
+         // Smart constructor already returns Validation[E, A]
+         // which is a type alias for ZValidation[Nothing, E, A]. Use as-is.
+         methodCall
+
+       case ValidationKind.FromEither =>
+         // Smart constructor returns Either[E, A]; convert to Validation[E, A]
+         // Validation[E, A] is an alias for ZValidation[Nothing, E, A]
+         val validationType   = TypeRepr.of[zio.prelude.Validation.type]
+         val validationComp   = validationType.typeSymbol.companionModule
+         val validationRef    = Ref(validationComp)
+         val fromEitherOpt    = validationComp.declaredMethods.find(_.name == "fromEither")
+         val fromEitherMethod = fromEitherOpt.getOrElse {
+           report.errorAndAbort("Could not find zio.prelude.Validation.fromEither")
+         }
+
+         // Extract E and A from Either[E, A]
+         val eitherType = methodCall.tpe.widen.dealias
+         val (errorType, resultType) = eitherType match {
+           case AppliedType(_, List(e, a)) => (e, a)
+           case other =>
+             report.errorAndAbort(
+               s"Expected Either[E, A] return type for validation method, but found: ${other.show}"
+             )
+         }
+
+         // Call Validation.fromEither[E, A](eitherValue): Validation[E, A]
+         validationRef
+           .select(fromEitherMethod)
+           .appliedToTypes(List(errorType, resultType))
+           .appliedTo(methodCall)
+     }
+   }
+
   /**
    * Creates a Term that wraps a plain value in ZValidation.succeed.
    * This produces ZValidation[Nothing, String, T] by widening the error channel
