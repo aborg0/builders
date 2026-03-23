@@ -76,41 +76,42 @@ object BuilderGeneratorSimplest {
         report.errorAndAbort(s"Could not summon Mirror.ProductOf for ${tpe.show}")
       }
 
-    arity match {
-      case 1 =>
-        '{
-          val m = $mirrorProd
-          val f: Any => T = (a0: Any) => m.fromProduct(Tuple1(a0))
-          val nt = Tuple1(f)
-          BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
-        }
+    // Configurable maximum arity (default 22). Can be overridden with system property "builders.maxArity".
+    val MaxArity: Int =
+      sys.props.get("builders.maxArity").flatMap(s => scala.util.Try(s.toInt).toOption).getOrElse(22)
 
-      case 2 =>
-        '{
-          val m = $mirrorProd
-          val raw: (Any, Any) => T = (a0: Any, a1: Any) => m.fromProduct((a0, a1))
-          val chain = caseclass2(raw)
-          val nt = Tuple1(chain)
-          BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
-        }
+    if (arity > MaxArity) {
+      report.errorAndAbort(s"Unsupported arity $arity for ${tpe.show}. Increase builders.maxArity to support larger arities (current: $MaxArity).")
+    }
 
-      case 3 =>
-        '{
-          val m = $mirrorProd
-          val raw: (Any, Any, Any) => T =
-            (a0: Any, a1: Any, a2: Any) => m.fromProduct((a0, a1, a2))
-          val chain = caseclass3(raw)
-          val nt = Tuple1(chain)
-          BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
-        }
+    // Build an uncurried raw function Array[Any] => T which the runtime helper will convert into
+    // the nested curried/Tuple1 chain. This is much simpler to construct in the macro API.
+    val mirrorTerm: Term = mirrorProd.asTerm
 
-      case n =>
-        report.errorAndAbort(
-          s"Unsupported arity $n for ${tpe.show}. Extend buildImpl / caseclassN handling."
-        )
+    // Create the raw lambda (arr: Array[Any]) => m.fromProduct((arr(0), arr(1), ...))
+    val rawLambda = Lambda(
+      Symbol.spliceOwner,
+      MethodType(List("arr"))(_ => List(TypeRepr.of[Array[Any]]), _ => TypeRepr.of[T]),
+      (_, ps) => {
+        val arrRef = ps.head.asInstanceOf[Term]
+        val elems: Seq[Expr[Any]] = (0 until arity).toList.map { i =>
+          val access = Apply(Select.unique(arrRef, "apply"), List(Literal(IntConstant(i))))
+          access.asExprOf[Any]
+        }
+        val tupleExpr = Expr.ofTupleFromSeq(elems)
+        Apply(Select.unique(mirrorTerm, "fromProduct"), List(tupleExpr.asTerm))
+      }
+    )
+
+    '{
+      val raw: Array[Any] => T = ${ rawLambda.asExprOf[Array[Any] => T] }
+      val chain = BuilderGeneratorSimplest.buildChainFromArray(raw, ${Expr(arity)})
+      val nt = Tuple1(chain)
+      BuilderTypeClass[T](nt.asInstanceOf[Builder[T]])
     }
   }
 
+  // Keep the simplest 1-arity helper for compatibility; multi-arity builders are generated in the macro now.
   def caseclass1[T, T0](transform: T0 => T): T0 => T = transform
 
   def caseclass2[T, T0, T1](transform: (T0, T1) => T): T0 => Tuple1[T1 => T] =
@@ -119,48 +120,7 @@ object BuilderGeneratorSimplest {
   def caseclass3[T, T0, T1, T2](transform: (T0, T1, T2) => T) =
     transform.curried.andThen(t => Tuple1(t.andThen(Tuple1.apply)))
 
-  def caseclass4[T, T0, T1, T2, T3](transform: (T0, T1, T2, T3) => T) =
-    transform.curried.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
-
-  def caseclass5[T, T0, T1, T2, T3, T4](transform: (T0, T1, T2, T3, T4) => T) =
-    transform.curried.andThen(t =>
-      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
-    ))
-
-  def caseclass6[T, T0, T1, T2, T3, T4, T5](transform: (T0, T1, T2, T3, T4, T5) => T) =
-    transform.curried.andThen(t =>
-      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
-        Tuple1(t.andThen(Tuple1.apply))
-      )))))
-    ))
-
-  def caseclass7[T, T0, T1, T2, T3, T4, T5, T6](transform: (T0, T1, T2, T3, T4, T5, T6) => T) =
-    transform.curried.andThen(t =>
-      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
-        Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply))))
-      )))))
-    ))
-
-  def caseclass8[T, T0, T1, T2, T3, T4, T5, T6, T7](transform: (T0, T1, T2, T3, T4, T5, T6, T7) => T) =
-    transform.curried.andThen(t =>
-      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
-        Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(Tuple1.apply)))))
-      )))))
-    )))
-
-  def caseclass9[T, T0, T1, T2, T3, T4, T5, T6, T7, T8](transform: (T0, T1, T2, T3, T4, T5, T6, T7, T8) => T) =
-    transform.curried.andThen(t =>
-      Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
-        Tuple1(t.andThen(t => Tuple1(t.andThen(t => Tuple1(t.andThen(t =>
-          Tuple1(t.andThen(Tuple1.apply))
-        )))))
-      )))))
-    )))
-
   private def nonNull[I] = (v: I) => { require(v != null); v }
-
-  def caseclass1NonNull[T, T0](transform: T0 => T): T0 => T =
-    caseclass1(transform).compose(nonNull[T0])
 
   def caseclass2NonNull[T, T0, T1](transform: (T0, T1) => T) =
     transform.curried.compose(nonNull[T0]).andThen(a => Tuple1(a.compose(nonNull[T1])))
@@ -169,4 +129,20 @@ object BuilderGeneratorSimplest {
     transform.curried.compose(nonNull[T0]).andThen(t =>
       Tuple1(t.compose(nonNull[T1]).andThen(f => Tuple1(f.compose(nonNull[T2]))))
     )
+
+  // Runtime helper: convert an uncurried Array[Any] => T into the nested curried chain expected by
+  // the Builder type (each step returns a Tuple1 wrapping the next function).
+  def buildChainFromArray[T](raw: Array[Any] => T, arity: Int): Any = {
+    def make(index: Int, acc: Array[Any]): Any = {
+      if (index >= arity) raw(acc)
+      else {
+        (a: Any) =>
+          val acc2 = acc.clone()
+          acc2(index) = a
+          if (index == arity - 1) raw(acc2)
+          else Tuple1(make(index + 1, acc2))
+      }
+    }
+    make(0, new Array[Any](arity))
+  }
 }
