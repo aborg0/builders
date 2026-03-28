@@ -71,5 +71,33 @@ object ValidationErrorTypeTests extends TestSuite {
       val compileTimeCheck: ZValidation[Nothing, Nothing, Simple] = Simple.validator.i(42).s("Op").d(LocalDate.now())
       val _ = compileTimeCheck
     }
+
+    test("PathAwareDummy_error_type") {
+      val defaultCheck: ZValidation[Nothing, String, PathAwareDummy] =
+        PathAwareDummy.defaultValidator.name("x").right(42)
+      val _ = defaultCheck
+
+      val pathCheck: ZValidation[Nothing, ValidationPathError[String], PathAwareDummy] =
+        PathAwareDummy.validator.name("x").right(42)
+      val _ = pathCheck
+    }
+
+    test("NestedOuter_error_type") {
+      val nestedCheck: ZValidation[Nothing, ValidationPathError[String], NestedOuter] =
+        NestedOuter.validator.name("x").child(42).right(42)
+      val _ = nestedCheck
+    }
+
+    test("PathAware_union_error_type") {
+      val pathUnionCheck: ZValidation[Nothing, ValidationPathError[Throwable | String], MixedThrowable] =
+        MixedThrowable.pathAwareValidator.i(2).ex("ok").op("Op")
+      val _ = pathUnionCheck
+    }
+
+    test("PlainPathDummy_path_config_is_no_op") {
+      val plainCheck: ZValidation[Nothing, Nothing, PlainPathDummy] =
+        PlainPathDummy.validator.name("x").count(1)
+      val _ = plainCheck
+    }
   }
 }

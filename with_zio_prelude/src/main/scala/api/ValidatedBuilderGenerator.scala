@@ -101,24 +101,54 @@ object ValidatedBuilderGenerator {
   // ─── Public entry points ──────────────────────────────────────────────────────
 
   inline def derived[T]: ValidatedBuilderGenerator[T]        = ${ derivedImplNoAllow[T] }
+  inline def derived[T](pathConfig: ValidationPathConfig): ValidatedBuilderGenerator[T] =
+    ${ derivedImplNoAllowWithPath[T]('pathConfig) }
+  inline def derived[T](customPrefix: Option[String]): ValidatedBuilderGenerator[T] =
+    ${ derivedImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   inline def derivedNoAllow[T]: ValidatedBuilderGenerator[T] = ${ derivedImplNoAllow[T] }
+  inline def derivedNoAllow[T](pathConfig: ValidationPathConfig): ValidatedBuilderGenerator[T] =
+    ${ derivedImplNoAllowWithPath[T]('pathConfig) }
+  inline def derivedNoAllow[T](customPrefix: Option[String]): ValidatedBuilderGenerator[T] =
+    ${ derivedImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   inline def derivedAllow[T]: ValidatedBuilderGenerator[T]   = ${ derivedImplAllow[T] }
+  inline def derivedAllow[T](pathConfig: ValidationPathConfig): ValidatedBuilderGenerator[T] =
+    ${ derivedImplAllowWithPath[T]('pathConfig) }
+  inline def derivedAllow[T](customPrefix: Option[String]): ValidatedBuilderGenerator[T] =
+    ${ derivedImplAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
 
   /** Returns `ValidatedBuilderSelectable[T, EU, R]` — a concrete class, so the transparent
    *  inline exposes it without any recursive match-type expansion at the call site. */
   transparent inline def builder[T]        = ${ builderImplNoAllow[T] }
+  transparent inline def builder[T](pathConfig: ValidationPathConfig) =
+    ${ builderImplNoAllowWithPath[T]('pathConfig) }
+  transparent inline def builder[T](customPrefix: Option[String]) =
+    ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderNoAllow[T] = ${ builderImplNoAllow[T] }
+  transparent inline def builderNoAllow[T](pathConfig: ValidationPathConfig) =
+    ${ builderImplNoAllowWithPath[T]('pathConfig) }
+  transparent inline def builderNoAllow[T](customPrefix: Option[String]) =
+    ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderAllow[T]   = ${ builderImplAllow[T] }
+  transparent inline def builderAllow[T](pathConfig: ValidationPathConfig) =
+    ${ builderImplAllowWithPath[T]('pathConfig) }
+  transparent inline def builderAllow[T](customPrefix: Option[String]) =
+    ${ builderImplAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
 
   // ─── Macro implementations ────────────────────────────────────────────────────
 
-  def derivedImplAllow[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]]   = derivedImpl[T](true)
-  def derivedImplNoAllow[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]] = derivedImpl[T](false)
+  def derivedImplAllow[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]]   =
+    derivedImpl[T](allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+  def derivedImplNoAllow[T: Type](using Quotes): Expr[ValidatedBuilderGenerator[T]] =
+    derivedImpl[T](allowUnion = false, withPath = false, '{ ValidationPathConfig() })
+  def derivedImplAllowWithPath[T: Type](pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] =
+    derivedImpl[T](allowUnion = true, withPath = true, pathConfig)
+  def derivedImplNoAllowWithPath[T: Type](pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] =
+    derivedImpl[T](allowUnion = false, withPath = true, pathConfig)
 
-  def derivedImpl[T: Type](allowUnion: Boolean)(using Quotes): Expr[ValidatedBuilderGenerator[T]] = {
+  def derivedImpl[T: Type](allowUnion: Boolean, withPath: Boolean, pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] = {
     import quotes.reflect.*
     val (tpe, sym, infos, euRepr) = analyse[T](allowUnion)
-    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion, withPath, pathConfig)
     tpe.asType match {
       case '[t] =>
         '{ new ValidatedBuilderGenerator[t] {
@@ -130,13 +160,19 @@ object ValidatedBuilderGenerator {
     }
   }
 
-  def builderImplAllow[T: Type](using Quotes): Expr[Any]   = builderImpl[T](true)
-  def builderImplNoAllow[T: Type](using Quotes): Expr[Any] = builderImpl[T](false)
+  def builderImplAllow[T: Type](using Quotes): Expr[Any]   =
+    builderImpl[T](allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+  def builderImplNoAllow[T: Type](using Quotes): Expr[Any] =
+    builderImpl[T](allowUnion = false, withPath = false, '{ ValidationPathConfig() })
+  def builderImplAllowWithPath[T: Type](pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[Any] =
+    builderImpl[T](allowUnion = true, withPath = true, pathConfig)
+  def builderImplNoAllowWithPath[T: Type](pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[Any] =
+    builderImpl[T](allowUnion = false, withPath = true, pathConfig)
 
-  def builderImpl[T: Type](allowUnion: Boolean)(using Quotes): Expr[Any] = {
+  def builderImpl[T: Type](allowUnion: Boolean, withPath: Boolean, pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[Any] = {
     import quotes.reflect.*
     val (tpe, sym, infos, euRepr) = analyse[T](allowUnion)
-    buildSel(euRepr, tpe, sym, infos, allowUnion)
+    buildSel(euRepr, tpe, sym, infos, allowUnion, withPath, pathConfig)
   }
 
   // ─── Analysis ─────────────────────────────────────────────────────────────────
@@ -183,19 +219,33 @@ object ValidatedBuilderGenerator {
     targetTpe:  quotes.reflect.TypeRepr,
     targetSym:  quotes.reflect.Symbol,
     infos:      List[ValidatorInfo],
-    allowUnion: Boolean
+    allowUnion: Boolean,
+    withPath:   Boolean,
+    pathConfig: Expr[ValidationPathConfig]
   ): Expr[Any] = {
     import quotes.reflect.*
 
     val n = infos.length
     if (n > 22) report.errorAndAbort(s"Arity $n > 22")
 
+    val hasValidatedFields = infos.exists {
+      case _: ValidatorInfo.NeedsValidation => true
+      case _ => false
+    }
     val names      = infos.map(_.fieldName)
     val primTypes  = infos.map(computePrimType(_, allowUnion))
     val fieldTypes = infos.map(fieldTypeOf)
+    val normalizedErrorRepr =
+      if (withPath && hasValidatedFields) computeUnifiedErrorType(infos, normalizePathAware = true)
+      else euRepr
+    val outputErrorRepr =
+      if (withPath && hasValidatedFields) {
+        AppliedType(TypeRepr.of[ValidationPathError[Any]].typeSymbol.typeRef, List(normalizedErrorRepr))
+      }
+      else euRepr
     val rType      = ntRepr(names, primTypes)
     val selTC      = TypeRepr.of[ValidatedBuilderSelectable[Any, Any, AnyNamedTuple]].typeSymbol.typeRef
-    val selType    = selTC.appliedTo(List(targetTpe, euRepr, rType))
+    val selType    = selTC.appliedTo(List(targetTpe, outputErrorRepr, rType))
     val selCtor    = TypeRepr.of[ValidatedBuilderSelectable[Any, Any, AnyNamedTuple]]
       .typeSymbol.primaryConstructor
 
@@ -203,13 +253,53 @@ object ValidatedBuilderGenerator {
     val validatorExprs: List[Expr[Any => Any]] = infos.map { info =>
       val primRepr    = computePrimType(info, allowUnion)
       val wrappedRepr = fieldTypeOf(info)
+      val rawErrorRepr = rawErrorTypeOf(info)
       primRepr.asType match {
         case '[p] => wrappedRepr.asType match {
-          case '[w] => euRepr.asType match {
-            case '[eu] =>
-              val fv: Expr[p => ZValidation[Nothing, eu, w]] = fieldValidator[p, eu, w](info, allowUnion)
-              '{ (x: Any) => ($fv)(x.asInstanceOf[p]) }
-            case _ => report.errorAndAbort("eu")
+          case '[w] => rawErrorRepr.asType match {
+            case '[rawEu] =>
+              val fvBase: Expr[p => ZValidation[Nothing, rawEu, w]] = fieldValidator[p, rawEu, w](info, allowUnion)
+              if (withPath && hasValidatedFields) {
+                outputErrorRepr.asType match {
+                  case '[outEu] =>
+                    val fieldNameExpr = Expr(info.fieldName)
+                    val pathSegmentsExpr: Expr[Seq[ValidationPathPart]] =
+                      '{ ValidationPathSupport.fieldSegments($pathConfig, $fieldNameExpr) }
+                    info match {
+                      case _: ValidatorInfo.NoValidation =>
+                        '{ (x: Any) => ($fvBase)(x.asInstanceOf[p]).asInstanceOf[ZValidation[Nothing, outEu, w]] }
+                      case _: ValidatorInfo.NeedsValidation =>
+                        unwrapPathAwareError(rawErrorRepr) match {
+                          case Some(innerErrorRepr) =>
+                            innerErrorRepr.asType match {
+                              case '[innerEu] =>
+                                val fvWithPrependedPath: Expr[p => ZValidation[Nothing, ValidationPathError[innerEu], w]] =
+                                  '{ (input: p) =>
+                                    ValidationPathSupport.prependExistingPath[innerEu, w](
+                                      $pathSegmentsExpr,
+                                      $fvBase(input).asInstanceOf[ZValidation[Nothing, ValidationPathError[innerEu], w]]
+                                    )
+                                  }
+                                '{ (x: Any) => ($fvWithPrependedPath)(x.asInstanceOf[p]).asInstanceOf[ZValidation[Nothing, outEu, w]] }
+                              case _ => report.errorAndAbort("innerEu")
+                            }
+                          case None =>
+                            val fvWithAttachedPath: Expr[p => ZValidation[Nothing, ValidationPathError[rawEu], w]] =
+                              '{ (input: p) =>
+                                ValidationPathSupport.attachPath[rawEu, w](
+                                  $pathSegmentsExpr,
+                                  $fvBase(input)
+                                )
+                              }
+                            '{ (x: Any) => ($fvWithAttachedPath)(x.asInstanceOf[p]).asInstanceOf[ZValidation[Nothing, outEu, w]] }
+                        }
+                    }
+                  case _ => report.errorAndAbort("outEu")
+                }
+              } else {
+                '{ (x: Any) => ($fvBase)(x.asInstanceOf[p]) }
+              }
+            case _ => report.errorAndAbort("rawEu")
           }
           case _ => report.errorAndAbort("w")
         }
@@ -218,13 +308,13 @@ object ValidatedBuilderGenerator {
     }
 
     // Build the combine function: Array[ZValidation[Nothing,Any,Any]] => ZValidation[Nothing,Any,T]
-    val combineExpr: Expr[Array[Any] => Any] = buildCombine(euRepr, targetTpe, targetSym, fieldTypes)
+    val combineExpr: Expr[Array[Any] => Any] = buildCombine(outputErrorRepr, targetTpe, targetSym, fieldTypes)
 
     // Build the chain expression — purely quoted, no Term-level Lambda
     val nExpr = Expr(n)
     val validatorsExpr: Expr[Array[Any => Any]] = '{ ${ Expr.ofList(validatorExprs) }.toArray }
 
-    euRepr.asType match {
+    outputErrorRepr.asType match {
       case '[eu] => targetTpe.asType match {
         case '[t] =>
           val chainExpr: Expr[Tuple1[Any => Any]] = '{
@@ -235,7 +325,7 @@ object ValidatedBuilderGenerator {
           // Wrap in ValidatedBuilderSelectable with precise compile-time type
           Typed(
             New(Inferred(selType)).select(selCtor)
-              .appliedToTypes(List(targetTpe, euRepr, rType))
+              .appliedToTypes(List(targetTpe, outputErrorRepr, rType))
               .appliedTo(chainExpr.asTerm),
             Inferred(selType)
           ).asExpr
@@ -343,14 +433,31 @@ object ValidatedBuilderGenerator {
       report.errorAndAbort(s"Could not find accessible 'apply' on companion ${companionModuleSym.fullName}")
     })
     try MacroDebugger.log(s"buildCombine: selected apply owner=${applyOwner.fullName} applySym=${applyM.name}") catch { case _: Throwable => () }
-    val compRef = Ref(applyOwner)
-    // Find the actual method symbol on the chosen owner to avoid mismatched owner/method symbols
-    val applyMethodOnOwner: quotes.reflect.Symbol = try {
-      val own = applyOwner
-      val methodsObj = try own.declaredMethods.toList catch { case _: Throwable => List.empty }
-      val classMethods = try if (own.moduleClass.exists) own.moduleClass.declaredMethods.toList else List.empty catch { case _: Throwable => List.empty }
-      (methodsObj ++ classMethods).find(_.name == applyM.name).getOrElse(applyM)
-    } catch { case _: Throwable => applyM }
+    val applyMethodOwnerPairs: List[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = try {
+      def methodsOf(sym: Symbol): List[Symbol] = try sym.declaredMethods.toList catch { case _: Throwable => List.empty }
+      val candidates: List[Symbol] = {
+        val base = companionModuleSym
+        val modClassCompanion = try if (companionModuleSym.moduleClass.exists) companionModuleSym.moduleClass.companionModule else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
+        val req1 = try Symbol.requiredModule(companionModuleSym.fullName) catch { case _: Throwable => Symbol.noSymbol }
+        val req2 = try Symbol.requiredModule(companionModuleSym.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
+        val req3 = try Symbol.requiredModule(companionModuleSym.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
+        val ownerBased = try Symbol.requiredModule(companionModuleSym.owner.fullName + "." + companionModuleSym.name) catch { case _: Throwable => Symbol.noSymbol }
+        List(base, modClassCompanion, req1, req2, req3, ownerBased).filter(s => s != Symbol.noSymbol).distinct
+      }
+      candidates.flatMap { cand =>
+        methodsOf(cand).map(m => (m, cand)) ++
+        (try if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty catch { case _: Throwable => List.empty })
+      }.filter { case (m, _) => m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected) }
+    } catch { case _: Throwable => Nil }
+    def applyOnCompanion(args: List[quotes.reflect.Term]): quotes.reflect.Term = {
+      val applyMethodAndOwner = applyMethodOwnerPairs.find { case (methodSym, _) =>
+        try methodSym.paramSymss.flatten.length == args.length catch { case _: Throwable => false }
+      }.orElse(applyMethodOwnerPairs.headOption).getOrElse {
+        report.errorAndAbort(s"Could not resolve companion apply overload for ${companionModuleSym.fullName} with arity ${args.length}")
+      }
+      val (applyMethod, applyOwner) = applyMethodAndOwner
+      Ref(applyOwner).select(applyMethod).appliedToArgs(args)
+    }
     euRepr.asType match {
       case '[eu] => targetTpe.asType match {
         case '[t] =>
@@ -360,7 +467,7 @@ object ValidatedBuilderGenerator {
                 case '[f0] =>
                   '{ (arr: Array[Any]) =>
                     arr(0).asInstanceOf[ZValidation[Nothing, eu, f0]].map(a0 =>
-                      ${ compRef.select(applyMethodOnOwner).appliedTo('a0.asTerm).asExprOf[t] }
+                      ${ applyOnCompanion(List('a0.asTerm)).asExprOf[t] }
                     )
                   }
                 case _ => report.errorAndAbort("f0")
@@ -371,7 +478,7 @@ object ValidatedBuilderGenerator {
                   '{ (arr: Array[Any]) =>
                     arr(0).asInstanceOf[ZValidation[Nothing, eu, f0]]
                       .zipWithPar(arr(1).asInstanceOf[ZValidation[Nothing, eu, f1]])((a0, a1) =>
-                        ${ compRef.select(applyMethodOnOwner).appliedToArgs(List('a0.asTerm, 'a1.asTerm)).asExprOf[t] }
+                        ${ applyOnCompanion(List('a0.asTerm, 'a1.asTerm)).asExprOf[t] }
                       )
                   }
                 case _ => report.errorAndAbort("f0/f1")
@@ -430,14 +537,28 @@ object ValidatedBuilderGenerator {
       report.errorAndAbort(s"Could not find accessible 'apply' on companion ${companionModuleSym2.fullName}")
     })
     try MacroDebugger.log(s"buildApply: selected apply owner=${applyOwner.fullName} applySym=${applyM.name}") catch { case _: Throwable => () }
-    val compRef = Ref(applyOwner)
-    // Find the actual method symbol on the chosen owner to avoid mismatched owner/method symbols
-    val applyMethodOnOwner: quotes.reflect.Symbol = try {
-      val own = applyOwner
-      val methodsObj = try own.declaredMethods.toList catch { case _: Throwable => List.empty }
-      val classMethods = try if (own.moduleClass.exists) own.moduleClass.declaredMethods.toList else List.empty catch { case _: Throwable => List.empty }
-      (methodsObj ++ classMethods).find(_.name == applyM.name).getOrElse(applyM)
-    } catch { case _: Throwable => applyM }
+    val applyMethodOwnerPairs: List[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = try {
+      def methodsOf(sym: Symbol): List[Symbol] = try sym.declaredMethods.toList catch { case _: Throwable => List.empty }
+      val candidates: List[Symbol] = {
+        val base = companionModuleSym2
+        val modClassCompanion = try if (companionModuleSym2.moduleClass.exists) companionModuleSym2.moduleClass.companionModule else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
+        val req1 = try Symbol.requiredModule(companionModuleSym2.fullName) catch { case _: Throwable => Symbol.noSymbol }
+        val req2 = try Symbol.requiredModule(companionModuleSym2.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
+        val req3 = try Symbol.requiredModule(companionModuleSym2.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
+        val ownerBased = try Symbol.requiredModule(companionModuleSym2.owner.fullName + "." + companionModuleSym2.name) catch { case _: Throwable => Symbol.noSymbol }
+        List(base, modClassCompanion, req1, req2, req3, ownerBased).filter(s => s != Symbol.noSymbol).distinct
+      }
+      candidates.flatMap { cand =>
+        methodsOf(cand).map(m => (m, cand)) ++
+        (try if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty catch { case _: Throwable => List.empty })
+      }.filter { case (m, _) => m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected) }
+    } catch { case _: Throwable => Nil }
+    val applyMethodForArityN: (quotes.reflect.Symbol, quotes.reflect.Symbol) =
+      applyMethodOwnerPairs.find { case (methodSym, _) =>
+        try methodSym.paramSymss.flatten.length == n catch { case _: Throwable => false }
+      }.orElse(applyMethodOwnerPairs.headOption).getOrElse {
+        report.errorAndAbort(s"Could not resolve companion apply overload for ${companionModuleSym2.fullName} with arity $n")
+      }
     val lam = Lambda(
       Symbol.spliceOwner,
       MethodType(List("args"))(_ => List(TypeRepr.of[Array[Any]]), _ => TypeRepr.of[T]),
@@ -448,7 +569,8 @@ object ValidatedBuilderGenerator {
             .find(_.name == "apply").get), List(Literal(IntConstant(i))))
           Typed(elem, Inferred(ft))
         }
-        compRef.select(applyMethodOnOwner).appliedToArgs(argTerms)
+        val (applyMethod, applyOwner) = applyMethodForArityN
+        Ref(applyOwner).select(applyMethod).appliedToArgs(argTerms)
       }
     )
     lam.asExprOf[Array[Any] => T]
@@ -503,13 +625,14 @@ object ValidatedBuilderGenerator {
     def applyMethodOnModule(moduleTerm: Term, methodName: String, arg: Term): Term = {
       // Look up the method on the static type of the module term (includes inherited methods)
       val modTpe = moduleTerm.tpe
-      val methodSym = modTpe.typeSymbol.methodMember(methodName).headOption
-        .orElse(modTpe.typeSymbol.memberMethod(methodName).headOption)
-        .getOrElse {
+      val methodSymOpt = modTpe.typeSymbol.methodMember(methodName).headOption
+        .orElse(modTpe.typeSymbol.methodMember(methodName).headOption)
+      methodSymOpt match {
+        case Some(methodSym) => Apply(Select(moduleTerm, methodSym), List(arg))
+        case None =>
           // fallback: Select.unique (may still work for some cases)
-          return Apply(Select.unique(moduleTerm, methodName), List(arg))
-        }
-      Apply(Select(moduleTerm, methodSym), List(arg))
+          Apply(Select.unique(moduleTerm, methodName), List(arg))
+      }
     }
 
     val callTerm: quotes.reflect.Term = try {
@@ -573,13 +696,38 @@ object ValidatedBuilderGenerator {
     }
   }
 
-  private def computeUnifiedErrorType(using Quotes)(infos: List[ValidatorInfo]): quotes.reflect.TypeRepr = {
+  private def computeUnifiedErrorType(using Quotes)(
+    infos: List[ValidatorInfo],
+    normalizePathAware: Boolean = false
+  ): quotes.reflect.TypeRepr = {
     import quotes.reflect.*
-    infos.collect { case nv: ValidatorInfo.NeedsValidation => nv.errorType.asInstanceOf[TypeRepr] }
+    infos.collect {
+      case nv: ValidatorInfo.NeedsValidation =>
+        val raw = nv.errorType.asInstanceOf[TypeRepr]
+        if (normalizePathAware) unwrapPathAwareError(raw).getOrElse(raw) else raw
+    }
       .distinct match {
       case Nil      => TypeRepr.of[Nothing]
       case h :: Nil => h
       case hs       => hs.reduce(OrType(_, _))
+    }
+  }
+
+  private def rawErrorTypeOf(using Quotes)(info: ValidatorInfo): quotes.reflect.TypeRepr = {
+    import quotes.reflect.*
+    info match {
+      case nv: ValidatorInfo.NeedsValidation => nv.errorType.asInstanceOf[TypeRepr]
+      case _: ValidatorInfo.NoValidation => TypeRepr.of[Nothing]
+    }
+  }
+
+  private def unwrapPathAwareError(using Quotes)(errorType: quotes.reflect.TypeRepr): Option[quotes.reflect.TypeRepr] = {
+    import quotes.reflect.*
+    val vpeSymbol = TypeRepr.of[ValidationPathError[Any]].typeSymbol
+    errorType.widen.dealias match {
+      case AppliedType(tc, List(nestedErrorType)) if tc.typeSymbol == vpeSymbol =>
+        Some(nestedErrorType)
+      case _ => None
     }
   }
 

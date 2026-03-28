@@ -13,7 +13,7 @@ import playground._
 class Bench_GeneratedValidated_vs_ManualValidated {
 
   // Use local small validated model to avoid SequenceNumber subtype complications
-  val gen = ValidatedBuilderGenerator.builderAllow[bench.SmallValidated]
+  val gen = ValidatedBuilderGenerator.builderAllow[SmallValidated]
   val manual = ManualBuilders.ManualSmallValidated.builder()
 
   // Success-case inputs

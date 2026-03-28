@@ -16,7 +16,7 @@ class Bench_SimpleBuilder_vs_Validated {
   val simple = SimpleSmallBuilder()
 
   // Validated builder for SmallValidated
-  val validated = ValidatedBuilderGenerator.builderAllow[bench.SmallValidated]
+  val validated = ValidatedBuilderGenerator.builderAllow[SmallValidated]
 
   @Benchmark
   def simple_complete(blackhole: Blackhole): Unit = {

@@ -1,6 +1,6 @@
 package models
 
-import api.ValidatedBuilderGenerator
+import api.{ValidatedBuilderGenerator, ValidationPathConfig}
 import playground.Opaque
 
 import zio.prelude.{Validation, ZValidation}
@@ -41,6 +41,9 @@ object MixedString {
 case class MixedThrowable(i: Int, ex: ExThrowable, op: Opaque.Op)
 object MixedThrowable {
   val validator = ValidatedBuilderGenerator.builder[MixedThrowable]
+  val pathAwareValidator = ValidatedBuilderGenerator.builder[MixedThrowable](
+    ValidationPathConfig(customPrefix = Some("mixed"))
+  )
 }
 
 // Example 3: mix including an enum-based Either error channel

@@ -1,6 +1,6 @@
 package api
 
-import models.{Simple, SimpleValidated}
+import models.{NestedOuter, PathAwareDummy, PlainPathDummy, Simple, SimpleValidated}
 import utest.*
 import playground.Opaque
 import zio.prelude.ZValidation
@@ -104,6 +104,86 @@ object ValidatedBuilderTest extends TestSuite {
       assert(res1.isSuccess)
       assert(res2.isSuccess)
       assert(res1.toEither == res2.toEither)
+    }
+
+    test("Path-aware builder keeps backward compatibility in default mode") {
+      val result: ZValidation[Nothing, String, PathAwareDummy] =
+        PathAwareDummy.defaultValidator.name("inner").right(43)
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.nonEmpty)
+      assert(errors.head == "43 is not 42.")
+    }
+
+    test("Path-aware builder returns configured path segments") {
+      val result: ZValidation[Nothing, ValidationPathError[String], PathAwareDummy] =
+        PathAwareDummy.validator.name("inner").right(43)
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.nonEmpty)
+      val first = errors.head
+      assert(first.path == Seq(
+        ValidationPathPart.Custom("custom prefix"),
+        ValidationPathPart.Name("right")
+      ))
+      assert(first.error == "43 is not 42.")
+    }
+
+    test("Path-aware builder prepends outer path to nested builder failures") {
+      val result: ZValidation[Nothing, ValidationPathError[String], NestedOuter] =
+        NestedOuter.validator.name("outer").child(43).right(42)
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.nonEmpty)
+      val first = errors.head
+      assert(first.path == Seq(
+        ValidationPathPart.Custom("outer prefix"),
+        ValidationPathPart.Name("child"),
+        ValidationPathPart.Custom("inner prefix"),
+        ValidationPathPart.Name("value")
+      ))
+      assert(first.error == "43 is not 42.")
+    }
+
+    test("Path-aware builder preserves distinct paths for multiple failures") {
+      val result: ZValidation[Nothing, ValidationPathError[String], NestedOuter] =
+        NestedOuter.validator.name("outer").child(41).right(43)
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.size == 2)
+      assert(errors.contains(
+        ValidationPathError(
+          Seq(
+            ValidationPathPart.Custom("outer prefix"),
+            ValidationPathPart.Name("child"),
+            ValidationPathPart.Custom("inner prefix"),
+            ValidationPathPart.Name("value")
+          ),
+          "41 is not 42."
+        )
+      ))
+      assert(errors.contains(
+        ValidationPathError(
+          Seq(
+            ValidationPathPart.Custom("outer prefix"),
+            ValidationPathPart.Name("right")
+          ),
+          "43 is not 42."
+        )
+      ))
+    }
+
+    test("Path config is a no-op for all-plain case classes") {
+      val result: ZValidation[Nothing, Nothing, PlainPathDummy] =
+        PlainPathDummy.validator.name("plain").count(2)
+
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built == PlainPathDummy("plain", 2))
     }
   }
 }

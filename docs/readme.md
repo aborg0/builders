@@ -115,3 +115,73 @@ You can mix fields that have different validation styles (Either-based, ZValidat
 plain types) — the macro computes a unified error type automatically. If you prefer the strict
 behaviour, use `builder` / `derived`; if you want callers to be able to pass already-wrapped
 values too, use `builderAllow` / `derivedAllow`.
+
+### Path-aware validation failures
+
+Validated builders can also attach path information to failures. Use `ValidationPathConfig`
+to opt into path-aware errors.
+
+```scala mdoc
+import api.{ValidatedBuilderGenerator, ValidationPathConfig, ValidationPathError, ValidationPathPart}
+import zio.prelude.ZValidation
+
+opaque type PathOp = Int
+object PathOp {
+  def apply(value: Int): Either[String, PathOp] =
+    value match {
+      case 42 => Right(value: PathOp)
+      case _ => Left(s"$value is not 42.")
+    }
+}
+
+final case class PathDemo(name: String, right: PathOp)
+object PathDemo {
+  val validator = ValidatedBuilderGenerator.builder[PathDemo](
+    ValidationPathConfig(customPrefix = Some("custom prefix"))
+  )
+}
+
+val built: ZValidation[Nothing, ValidationPathError[String], PathDemo] =
+  PathDemo.validator.name("inner").right(43)
+```
+
+For the same example, the path-aware failure value is:
+
+```scala
+ValidationPathError(
+  path = Seq(
+    ValidationPathPart.Custom("custom prefix"),
+    ValidationPathPart.Name("right")
+  ),
+  error = "43 is not 42."
+)
+```
+
+For the failing `right(43)` call, the failure path is:
+
+```scala
+Seq(
+  ValidationPathPart.Custom("custom prefix"),
+  ValidationPathPart.Name("right")
+)
+```
+
+If a field is validated by another path-aware validated builder, the outer path is prepended to
+the inner one. For example, a failure in an outer `child` field whose inner builder fails at
+`value` becomes:
+
+```scala
+Seq(
+  ValidationPathPart.Custom("outer prefix"),
+  ValidationPathPart.Name("child"),
+  ValidationPathPart.Custom("inner prefix"),
+  ValidationPathPart.Name("value")
+)
+```
+
+When a case class has no validating fields, `ValidationPathConfig` does not change the error
+type; it remains `Nothing`.
+
+For mixed-validator builders, the wrapped error type `E` can be a union. For example, if the
+unified error type is `String | Throwable`, the path-aware error channel becomes
+`ValidationPathError[String | Throwable]`.
