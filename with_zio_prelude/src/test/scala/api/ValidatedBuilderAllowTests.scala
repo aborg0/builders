@@ -44,6 +44,32 @@ object ValidatedBuilderAllowTests extends TestSuite {
       val miss = ValidatedBuilderGenerator.builderAllow[models.MixedEnum].i(3).code("miss").valid("Op")
       assert(miss.isFailure)
     }
+
+    test("builderAllow accepts wrapped Option values") {
+      val some = OptionalInputDummy.validatorAllow.name("opt").maybe(Some(11))
+      assert(some.isSuccess)
+      assert(some.toEither.toOption.get == OptionalInputDummy("opt", Some(11)))
+
+      val none = OptionalInputDummy.validatorAllow.name("opt").maybe(None)
+      assert(none.isSuccess)
+      assert(none.toEither.toOption.get == OptionalInputDummy("opt", None))
+    }
+
+    test("builderAllow accepts wrapped java Optional values") {
+      val wrapped = JavaOptionalDummy.validatorAllow
+        .name("x")
+        .maybe(java.util.Optional.of("v"))
+        .maybeInt(java.util.OptionalInt.of(1))
+        .maybeLong(java.util.OptionalLong.of(2L))
+        .maybeDouble(java.util.OptionalDouble.of(3.0))
+
+      assert(wrapped.isSuccess)
+      val built = wrapped.toEither.toOption.get
+      assert(built.maybe.get == "v")
+      assert(built.maybeInt.getAsInt == 1)
+      assert(built.maybeLong.getAsLong == 2L)
+      assert(built.maybeDouble.getAsDouble == 3.0)
+    }
   }
 }
 

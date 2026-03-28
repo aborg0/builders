@@ -1,6 +1,6 @@
 package api
 
-import models.{NestedOuter, PathAwareDummy, PlainPathDummy, Simple, SimpleValidated}
+import models.{JavaOptionalDummy, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, Simple, SimpleValidated, TrailingOptionalDummy}
 import utest.*
 import playground.Opaque
 import zio.prelude.ZValidation
@@ -184,6 +184,57 @@ object ValidatedBuilderTest extends TestSuite {
       assert(result.isSuccess)
       val built = result.toEither.toOption.get
       assert(built == PlainPathDummy("plain", 2))
+    }
+
+    test("builder accepts raw and None for Option fields") {
+      val rawValue = OptionalInputDummy.validator.name("a").maybe(3)
+      assert(rawValue.isSuccess)
+      assert(rawValue.toEither.toOption.get == OptionalInputDummy("a", Some(3)))
+
+      val noneValue = OptionalInputDummy.validator.name("a").maybe(None)
+      assert(noneValue.isSuccess)
+      assert(noneValue.toEither.toOption.get == OptionalInputDummy("a", None))
+    }
+
+    test("builder supports trailing completion for nullable and Option fields") {
+      val result = TrailingOptionalDummy.validator.name("ok").i(2).date(null).!
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.name == "ok")
+      assert(built.i == 2)
+      assert(built.date == null)
+      assert(built.result == None)
+    }
+
+    test("builder supports raw values for java Optional family") {
+      val result = JavaOptionalDummy.validator
+        .name("x")
+        .maybe("v")
+        .maybeInt(1)
+        .maybeLong(2L)
+        .maybeDouble(3.0)
+
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.maybe.isPresent)
+      assert(built.maybe.get == "v")
+      assert(built.maybeInt.isPresent)
+      assert(built.maybeInt.getAsInt == 1)
+      assert(built.maybeLong.isPresent)
+      assert(built.maybeLong.getAsLong == 2L)
+      assert(built.maybeDouble.isPresent)
+      assert(built.maybeDouble.getAsDouble == 3.0)
+    }
+
+    test("builder completion fills java Optional empties") {
+      val result = JavaOptionalDummy.validator.name("x").maybe("v").!
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.maybe.isPresent)
+      assert(built.maybe.get == "v")
+      assert(!built.maybeInt.isPresent)
+      assert(!built.maybeLong.isPresent)
+      assert(!built.maybeDouble.isPresent)
     }
   }
 }

@@ -116,6 +116,47 @@ plain types) — the macro computes a unified error type automatically. If you p
 behaviour, use `builder` / `derived`; if you want callers to be able to pass already-wrapped
 values too, use `builderAllow` / `derivedAllow`.
 
+### Optional-like fields and `.!` completion
+
+Validated builders support optional-like inputs for plain (no-smart-constructor) fields:
+
+- `Option[T]`
+  - `builder` accepts raw `T` and `None`
+  - `builderAllow` accepts raw `T` and wrapped `Option[T]` (`Some`/`None`)
+- Java optionals
+  - `java.util.Optional[T]`, `java.util.OptionalInt`, `java.util.OptionalLong`, `java.util.OptionalDouble`
+  - `builder` accepts raw values
+  - `builderAllow` accepts both raw and wrapped optional values
+- Nullable unions (`T | Null`) are treated as optional-like and can use `null`
+
+When only trailing optional-like fields remain, you can complete with `.!`.
+Omitted trailing values are synthesized as empty/default optional values:
+
+- `Option[_]` -> `None`
+- `java.util.Optional[_]` -> `Optional.empty()`
+- `OptionalInt` -> `OptionalInt.empty()`
+- `OptionalLong` -> `OptionalLong.empty()`
+- `OptionalDouble` -> `OptionalDouble.empty()`
+- `T | Null` -> `null`
+
+`.!` is compile-time rejected if required fields still remain.
+
+```scala
+final case class Dummy(
+  s: String,
+  date: java.time.LocalDate | Null,
+  i: Int,
+  result: Option[Dummy]
+)
+
+val dummyBuilder = api.ValidatedBuilderGenerator.builder[Dummy]
+val dummyBuilderAllow = api.ValidatedBuilderGenerator.builderAllow[Dummy]
+
+dummyBuilder.s("hello").date(java.time.LocalDate.now).i(1).result(None)
+dummyBuilder.s("hello").date(null).i(2).!
+dummyBuilderAllow.s("hello").date(null).i(0).result(Some(Dummy("x", null, 1, None)))
+```
+
 ### Path-aware validation failures
 
 Validated builders can also attach path information to failures. Use `ValidationPathConfig`

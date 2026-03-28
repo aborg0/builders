@@ -5,11 +5,6 @@ import zio.prelude.Validation
 
 final case class SmallValidated(i: Int, op: Opaque.Op, v: Opaque.ValidOp)
 
-object SmallValidated {
-  def apply(i: Int, op: Opaque.Op, v: Opaque.ValidOp): SmallValidated =
-    new SmallValidated(i, op, v)
-}
-
 object SmallValidatedManual {
   // Manual builder that mirrors the chained builder API used by the generated builders:
   // manual.i(42).op("Op").v("Op") => Validation[String, SmallValidated]

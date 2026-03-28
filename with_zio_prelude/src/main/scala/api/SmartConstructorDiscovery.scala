@@ -38,8 +38,29 @@ object SmartConstructorDiscovery {
     fieldType: quotes.reflect.TypeRepr
   ): ValidatorInfo = {
     import quotes.reflect.*
+
+    // Optional-like unions and stdlib optionals are plain pass-through fields.
+    fieldType.widen.dealias match {
+      case OrType(a, b) if a.widen.dealias =:= TypeRepr.of[Null] || b.widen.dealias =:= TypeRepr.of[Null] =>
+        MacroDebugger.log(s"Nullable union detected for $fieldName — treating as no-validation")
+        return ValidatorInfo.NoValidation(fieldName, fieldType)
+      case AppliedType(tc, _) if tc.typeSymbol == TypeRepr.of[Option[Any]].typeSymbol =>
+        MacroDebugger.log(s"Option detected for $fieldName — treating as no-validation")
+        return ValidatorInfo.NoValidation(fieldName, fieldType)
+      case AppliedType(tc, _) if tc.typeSymbol == TypeRepr.of[java.util.Optional[Any]].typeSymbol =>
+        MacroDebugger.log(s"java.util.Optional detected for $fieldName — treating as no-validation")
+        return ValidatorInfo.NoValidation(fieldName, fieldType)
+      case t if t =:= TypeRepr.of[java.util.OptionalInt] || t =:= TypeRepr.of[java.util.OptionalLong] || t =:= TypeRepr.of[java.util.OptionalDouble] =>
+        MacroDebugger.log(s"java.util.Optional primitive variant detected for $fieldName — treating as no-validation")
+        return ValidatorInfo.NoValidation(fieldName, fieldType)
+      case _ => ()
+    }
     
     val typeSymbol = fieldType.typeSymbol
+    if (typeSymbol == Symbol.noSymbol) {
+      MacroDebugger.log(s"No symbol for field '$fieldName' (${fieldType.show}) — treating as no-validation")
+      return ValidatorInfo.NoValidation(fieldName, fieldType)
+    }
     // Skip searching companion for plain Scala primitive/standard types — they don't have smart constructors.
     try {
       if (typeSymbol.fullName.startsWith("scala.")) {

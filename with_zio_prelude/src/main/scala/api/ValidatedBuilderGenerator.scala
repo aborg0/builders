@@ -9,10 +9,13 @@ import zio.prelude.ZValidation
 
 /** Selectable wrapper exposing builder fields by name at a given remaining level. */
 class ValidatedBuilderSelectable[T, E, R <: AnyNamedTuple](
-  private[api] val underlying: Any
+  private[api] val underlying: Any,
+  private[api] val complete: () => Any = () => throw new UnsupportedOperationException("Cannot complete builder: required fields remain")
 ) extends Selectable {
   type Fields = ValidatedBuilderGenerator.BuilderFields[R, T, E]
   def selectDynamic(name: String): Any = underlying.asInstanceOf[Tuple1[Any]]._1
+  def `!`(using ValidatedBuilderGenerator.CanComplete[R]): ZValidation[Nothing, E, T] =
+    complete().asInstanceOf[ZValidation[Nothing, E, T]]
 }
 
 /**
@@ -29,7 +32,8 @@ class ValidatedBuilderChain[T](
   private val validators: Array[Any => Any],  // Any => ZValidation[Nothing, Any, Any]
   private val combine:    Array[Any] => Any,  // Array[ZValidation] => ZValidation[Nothing, Any, T]
   private val n:          Int,
-  private val collected:  Array[Any]          // ZValidation values collected so far
+  private val collected:  Array[Any],         // ZValidation values collected so far
+  private val completionDefaults: Array[Option[Any]]
 ) {
   /**
    * Returns the Tuple1(fn) for level `idx`.
@@ -44,12 +48,28 @@ class ValidatedBuilderChain[T](
       if (idx == n - 1) {
         combine(newCollected)                                  // ZValidation[Nothing, Any, T]
       } else {
-        val nextChain = new ValidatedBuilderChain[T](validators, combine, n, newCollected)
+        val nextChain = new ValidatedBuilderChain[T](validators, combine, n, newCollected, completionDefaults)
         // The R type param is erased at runtime; the compile-time Fields type is set by
         // the macro via a Typed ascription on the ValidatedBuilderSelectable constructor call.
-        new ValidatedBuilderSelectable[T, Any, R](nextChain.tuple1AtLevel[R](idx + 1))
+        new ValidatedBuilderSelectable[T, Any, R](
+          nextChain.tuple1AtLevel[R](idx + 1),
+          () => nextChain.completeFrom(idx + 1)
+        )
       }
     }
+
+  def completeFrom(idx: Int): Any = {
+    var i = idx
+    var current = collected
+    while (i < n) {
+      val raw = completionDefaults(i).getOrElse {
+        throw new UnsupportedOperationException(s"Cannot complete builder from index $idx: field at index $i is required")
+      }
+      current = current :+ validators(i)(raw)
+      i += 1
+    }
+    combine(current)
+  }
 }
 
 // ─── Main generator ───────────────────────────────────────────────────────────
@@ -63,6 +83,7 @@ object ValidatedBuilderGenerator {
   import scala.NamedTuple
   import scala.NamedTuple.*
   import scala.NamedTuple.Split
+  import scala.compiletime.ops.boolean.&&
   import zio.prelude.ZValidation
   import api.ValidatorInfo.ValidationKind
 
@@ -70,6 +91,52 @@ object ValidatedBuilderGenerator {
   import scala.quoted.*
 
   // ─── Match types ──────────────────────────────────────────────────────────────
+
+  type IsOptionalLike[T] <: Boolean = T match {
+    case Option[?] => true
+    case java.util.Optional[?] => true
+    case java.util.OptionalInt => true
+    case java.util.OptionalLong => true
+    case java.util.OptionalDouble => true
+    case None.type => true
+    case Null => true
+    case a | b => scala.compiletime.ops.boolean.||[IsOptionalLike[a], IsOptionalLike[b]]
+    case _ => false
+  }
+
+  type AllOptional[Ts <: Tuple] <: Boolean = Ts match {
+    case EmptyTuple => true
+    case h *: t => IsOptionalLike[h] && AllOptional[t]
+  }
+
+  sealed trait IsTrue[B <: Boolean]
+  object IsTrue {
+    given IsTrue[true] with {}
+  }
+
+  sealed trait CanComplete[R <: AnyNamedTuple]
+  object CanComplete {
+    inline given [R <: AnyNamedTuple]: CanComplete[R] = ${ canCompleteGivenImpl[R] }
+  }
+
+  private def canCompleteGivenImpl[R <: AnyNamedTuple: Type](using Quotes): Expr[CanComplete[R]] = {
+    import quotes.reflect.*
+
+    val remaining = namedTupleEntries(TypeRepr.of[R])
+    if (remaining.isEmpty) {
+      report.errorAndAbort("Cannot complete builder: no remaining fields were detected for this step")
+    }
+
+    val required = remaining.filterNot { case (_, tpe) => isOptionalInputType(tpe) }
+    if (required.nonEmpty) {
+      val rendered = required.map { case (name, tpe) => s"$name: ${tpe.show}" }.mkString(", ")
+      report.errorAndAbort(
+        s"Cannot complete builder with .!: required fields remain -> $rendered"
+      )
+    }
+
+    '{ new CanComplete[R] {} }
+  }
 
   type BuilderFields[R <: AnyNamedTuple, T, E] <: AnyNamedTuple =
     NamedTuple.DropNames[R] match {
@@ -235,6 +302,7 @@ object ValidatedBuilderGenerator {
     val names      = infos.map(_.fieldName)
     val primTypes  = infos.map(computePrimType(_, allowUnion))
     val fieldTypes = infos.map(fieldTypeOf)
+    val completionDefaults = fieldTypes.map(defaultCompletionValue)
     val normalizedErrorRepr =
       if (withPath && hasValidatedFields) computeUnifiedErrorType(infos, normalizePathAware = true)
       else euRepr
@@ -309,26 +377,34 @@ object ValidatedBuilderGenerator {
 
     // Build the combine function: Array[ZValidation[Nothing,Any,Any]] => ZValidation[Nothing,Any,T]
     val combineExpr: Expr[Array[Any] => Any] = buildCombine(outputErrorRepr, targetTpe, targetSym, fieldTypes)
+    val completionDefaultsExprs: List[Expr[Option[Any]]] = completionDefaults.map {
+      case Some(v) => '{ Some($v) }
+      case None => '{ None }
+    }
 
     // Build the chain expression — purely quoted, no Term-level Lambda
     val nExpr = Expr(n)
     val validatorsExpr: Expr[Array[Any => Any]] = '{ ${ Expr.ofList(validatorExprs) }.toArray }
+    val defaultsExpr: Expr[Array[Option[Any]]] = '{ ${ Expr.ofList(completionDefaultsExprs) }.toArray }
 
     outputErrorRepr.asType match {
       case '[eu] => targetTpe.asType match {
         case '[t] =>
-          val chainExpr: Expr[Tuple1[Any => Any]] = '{
-            new ValidatedBuilderChain[t]($validatorsExpr, $combineExpr, $nExpr, new Array[Any](0))
-              .tuple1AtLevel[AnyNamedTuple](0)
-              .asInstanceOf[Tuple1[Any => Any]]
+          val selectableExpr: Expr[ValidatedBuilderSelectable[t, eu, AnyNamedTuple]] = '{
+            val rootChain = new ValidatedBuilderChain[t](
+              $validatorsExpr,
+              $combineExpr,
+              $nExpr,
+              new Array[Any](0),
+              $defaultsExpr
+            )
+            new ValidatedBuilderSelectable[t, eu, AnyNamedTuple](
+              rootChain.tuple1AtLevel[AnyNamedTuple](0).asInstanceOf[Tuple1[Any => Any]],
+              () => rootChain.completeFrom(0)
+            )
           }
           // Wrap in ValidatedBuilderSelectable with precise compile-time type
-          Typed(
-            New(Inferred(selType)).select(selCtor)
-              .appliedToTypes(List(targetTpe, outputErrorRepr, rType))
-              .appliedTo(chainExpr.asTerm),
-            Inferred(selType)
-          ).asExpr
+          Typed(selectableExpr.asTerm, Inferred(selType)).asExpr
         case _ => report.errorAndAbort("t")
       }
       case _ => report.errorAndAbort("eu")
@@ -383,7 +459,81 @@ object ValidatedBuilderGenerator {
           }
         }
       case _: ValidatorInfo.NoValidation =>
-        '{ (p: P) => ZValidation.succeed(p.asInstanceOf[W]) }
+        val wrapped = TypeRepr.of[W].widen.dealias
+        optionInnerType(wrapped) match {
+          case Some(innerTpe) =>
+            innerTpe.asType match {
+              case '[inner] =>
+                if (allowUnion) {
+                  '{ (p: P) =>
+                    val raw = p.asInstanceOf[Any]
+                    val out: Option[inner] = raw match {
+                      case opt: Option[?] => opt.asInstanceOf[Option[inner]]
+                      case _ => Some(raw.asInstanceOf[inner])
+                    }
+                    ZValidation.succeed(out.asInstanceOf[W])
+                  }
+                } else {
+                  '{ (p: P) =>
+                    val raw = p.asInstanceOf[Any]
+                    val out: Option[inner] = if (raw == None) None else Some(raw.asInstanceOf[inner])
+                    ZValidation.succeed(out.asInstanceOf[W])
+                  }
+                }
+              case _ => report.errorAndAbort("inner")
+            }
+          case None =>
+            javaOptionalInnerType(wrapped) match {
+              case Some(innerTpe) =>
+                innerTpe.asType match {
+                  case '[inner] =>
+                    '{ (p: P) =>
+                      val raw = p.asInstanceOf[Any]
+                      val out: java.util.Optional[inner] = raw match {
+                        case opt: java.util.Optional[?] => opt.asInstanceOf[java.util.Optional[inner]]
+                        case null => java.util.Optional.empty[inner]()
+                        case _ => java.util.Optional.ofNullable(raw.asInstanceOf[inner])
+                      }
+                      ZValidation.succeed(out.asInstanceOf[W])
+                    }
+                  case _ => report.errorAndAbort("inner")
+                }
+              case None =>
+                if (isJavaOptionalInt(wrapped)) {
+                  '{ (p: P) =>
+                    val raw = p.asInstanceOf[Any]
+                    val out: java.util.OptionalInt = raw match {
+                      case opt: java.util.OptionalInt => opt
+                      case null => java.util.OptionalInt.empty()
+                      case _ => java.util.OptionalInt.of(raw.asInstanceOf[Int])
+                    }
+                    ZValidation.succeed(out.asInstanceOf[W])
+                  }
+                } else if (isJavaOptionalLong(wrapped)) {
+                  '{ (p: P) =>
+                    val raw = p.asInstanceOf[Any]
+                    val out: java.util.OptionalLong = raw match {
+                      case opt: java.util.OptionalLong => opt
+                      case null => java.util.OptionalLong.empty()
+                      case _ => java.util.OptionalLong.of(raw.asInstanceOf[Long])
+                    }
+                    ZValidation.succeed(out.asInstanceOf[W])
+                  }
+                } else if (isJavaOptionalDouble(wrapped)) {
+                  '{ (p: P) =>
+                    val raw = p.asInstanceOf[Any]
+                    val out: java.util.OptionalDouble = raw match {
+                      case opt: java.util.OptionalDouble => opt
+                      case null => java.util.OptionalDouble.empty()
+                      case _ => java.util.OptionalDouble.of(raw.asInstanceOf[Double])
+                    }
+                    ZValidation.succeed(out.asInstanceOf[W])
+                  }
+                } else {
+                  '{ (p: P) => ZValidation.succeed(p.asInstanceOf[W]) }
+                }
+            }
+        }
     }
   }
 
@@ -738,7 +888,25 @@ object ValidatedBuilderGenerator {
         val p = nv.primitiveType.asInstanceOf[TypeRepr]
         val w = nv.wrappedType.asInstanceOf[TypeRepr]
         if (allowUnion && !(p.widen.dealias =:= w.widen.dealias)) OrType(p, w) else p
-      case nv: ValidatorInfo.NoValidation => nv.plainType.asInstanceOf[TypeRepr]
+      case nv: ValidatorInfo.NoValidation =>
+        val plain = nv.plainType.asInstanceOf[TypeRepr]
+        optionInnerType(plain) match {
+          case Some(inner) => if (allowUnion) OrType(inner, plain) else OrType(inner, TypeRepr.of[None.type])
+          case None =>
+            javaOptionalInnerType(plain) match {
+              case Some(inner) => OrType(inner, plain)
+              case None =>
+                if (isJavaOptionalInt(plain)) {
+                  OrType(TypeRepr.of[Int], plain)
+                } else if (isJavaOptionalLong(plain)) {
+                  OrType(TypeRepr.of[Long], plain)
+                } else if (isJavaOptionalDouble(plain)) {
+                  OrType(TypeRepr.of[Double], plain)
+                } else {
+                  plain
+                }
+            }
+        }
     }
   }
 
@@ -747,6 +915,125 @@ object ValidatedBuilderGenerator {
     info match {
       case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]
       case nv: ValidatorInfo.NoValidation    => nv.plainType.asInstanceOf[TypeRepr]
+    }
+  }
+
+  private def optionInnerType(using Quotes)(tp: quotes.reflect.TypeRepr): Option[quotes.reflect.TypeRepr] = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case AppliedType(tc, List(inner)) if tc.typeSymbol == TypeRepr.of[Option[Any]].typeSymbol => Some(inner)
+      case _ => None
+    }
+  }
+
+  private def javaOptionalInnerType(using Quotes)(tp: quotes.reflect.TypeRepr): Option[quotes.reflect.TypeRepr] = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case AppliedType(tc, List(inner)) if tc.typeSymbol == TypeRepr.of[java.util.Optional[Any]].typeSymbol => Some(inner)
+      case _ => None
+    }
+  }
+
+  private def isJavaOptionalInt(using Quotes)(tp: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    tp.widen.dealias =:= TypeRepr.of[java.util.OptionalInt]
+  }
+
+  private def isJavaOptionalLong(using Quotes)(tp: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    tp.widen.dealias =:= TypeRepr.of[java.util.OptionalLong]
+  }
+
+  private def isJavaOptionalDouble(using Quotes)(tp: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    tp.widen.dealias =:= TypeRepr.of[java.util.OptionalDouble]
+  }
+
+  private def isNullableUnion(using Quotes)(tp: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case OrType(a, b) =>
+        a.widen.dealias =:= TypeRepr.of[Null] ||
+        b.widen.dealias =:= TypeRepr.of[Null] ||
+        isNullableUnion(a) ||
+        isNullableUnion(b)
+      case _ => false
+    }
+  }
+
+  private def isOptionalInputType(using Quotes)(tp: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case t if t =:= TypeRepr.of[Null] => true
+      case t if t =:= TypeRepr.of[None.type] => true
+      case AppliedType(tc, _) if tc.typeSymbol == TypeRepr.of[Option[Any]].typeSymbol => true
+      case AppliedType(tc, _) if tc.typeSymbol == TypeRepr.of[java.util.Optional[Any]].typeSymbol => true
+      case t if t =:= TypeRepr.of[java.util.OptionalInt] => true
+      case t if t =:= TypeRepr.of[java.util.OptionalLong] => true
+      case t if t =:= TypeRepr.of[java.util.OptionalDouble] => true
+      case OrType(a, b) => isOptionalInputType(a) || isOptionalInputType(b)
+      case _ => false
+    }
+  }
+
+  private def tupleElements(using Quotes)(tp: quotes.reflect.TypeRepr): List[quotes.reflect.TypeRepr] = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case t if t =:= TypeRepr.of[EmptyTuple] => Nil
+      case AppliedType(cons, List(h, t)) if cons.typeSymbol == TypeRepr.of[Int *: EmptyTuple].typeSymbol =>
+        h :: tupleElements(t)
+      case _ => Nil
+    }
+  }
+
+  private def tupleStringConstants(using Quotes)(tp: quotes.reflect.TypeRepr): List[String] = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case t if t =:= TypeRepr.of[EmptyTuple] => Nil
+      case AppliedType(cons, List(ConstantType(StringConstant(name)), tail))
+          if cons.typeSymbol == TypeRepr.of[Int *: EmptyTuple].typeSymbol =>
+        name :: tupleStringConstants(tail)
+      case AppliedType(cons, List(_, tail)) if cons.typeSymbol == TypeRepr.of[Int *: EmptyTuple].typeSymbol =>
+        "<field>" :: tupleStringConstants(tail)
+      case _ => Nil
+    }
+  }
+
+  private def namedTupleEntries(using Quotes)(tp: quotes.reflect.TypeRepr): List[(String, quotes.reflect.TypeRepr)] = {
+    import quotes.reflect.*
+    tp.widen.dealias match {
+      case AppliedType(nt, List(names, values)) if nt.typeSymbol == TypeRepr.of[scala.NamedTuple.NamedTuple[Tuple1["x"], Tuple1[Int]]].typeSymbol =>
+        val ns = tupleStringConstants(names)
+        val vs = tupleElements(values)
+        ns.zip(vs)
+      case _ => Nil
+    }
+  }
+
+  private def defaultCompletionValue(using Quotes)(tp: quotes.reflect.TypeRepr): Option[Expr[Any]] = {
+    import quotes.reflect.*
+    optionInnerType(tp) match {
+      case Some(_) => Some('{ None })
+      case None =>
+        javaOptionalInnerType(tp) match {
+          case Some(inner) =>
+            inner.asType match {
+              case '[i] => Some('{ java.util.Optional.empty[i]().asInstanceOf[Any] })
+              case _ => None
+            }
+          case None =>
+            if (isJavaOptionalInt(tp)) {
+              Some('{ java.util.OptionalInt.empty().asInstanceOf[Any] })
+            } else if (isJavaOptionalLong(tp)) {
+              Some('{ java.util.OptionalLong.empty().asInstanceOf[Any] })
+            } else if (isJavaOptionalDouble(tp)) {
+              Some('{ java.util.OptionalDouble.empty().asInstanceOf[Any] })
+            } else if (isNullableUnion(tp)) {
+              Some('{ null })
+            } else {
+              None
+            }
+        }
     }
   }
 
