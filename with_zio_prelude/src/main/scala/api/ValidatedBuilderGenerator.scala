@@ -250,19 +250,45 @@ object ValidatedBuilderGenerator {
     val tpe = TypeRepr.of[T]
     val sym = tpe.typeSymbol
     if (!sym.flags.is(Flags.Case)) report.errorAndAbort(s"${tpe.show} must be a case class")
-    val fields = sym.primaryConstructor.paramSymss.flatten.map(p => (p.name, tpe.memberType(p)))
+    val nameAnnotationFqn = "api.Name"
+    val params = sym.primaryConstructor.paramSymss.flatten
+    val fields = params.map { p =>
+      val isName = p.annotations.exists { ann =>
+        try ann.tpe.typeSymbol.fullName == nameAnnotationFqn
+        catch { case _: Throwable => false }
+      }
+      (p.name, tpe.memberType(p), isName)
+    }
     if (fields.isEmpty) report.errorAndAbort(s"${tpe.show} must have at least one field")
-    val infos  = fields.map { case (n, t) => SmartConstructorDiscovery.discoverValidator(n, t) }
+    val nameFields = fields.collect { case (n, _, true) => n }
+    if (nameFields.size > 1) {
+      report.errorAndAbort(
+        s"${tpe.show} has ${nameFields.size} @api.Name annotations (${nameFields.mkString(", ")}); at most one is allowed"
+      )
+    }
+    val infos = fields.map { case (n, t, isName) =>
+      val base = SmartConstructorDiscovery.discoverValidator(n, t)
+      if (!isName) base else base match {
+        case nv: ValidatorInfo.NeedsValidation   => nv.copy(isNameAnnotated = true)
+        case nv: ValidatorInfo.NoValidation      => nv.copy(isNameAnnotated = true)
+        case sv: ValidatorInfo.SeqLikeValidation => sv.copy(isNameAnnotated = true)
+        case mv: ValidatorInfo.MapValidation     => mv.copy(isNameAnnotated = true)
+      }
+    }
     // Debug: log discovered validator infos
     try {
-      infos.zip(fields).foreach { case (info, (n, t)) =>
+      infos.zip(fields).foreach { case (info, (n, _, _)) =>
         info match {
           case nv: ValidatorInfo.NeedsValidation =>
             try {
-              MacroDebugger.log(s"Analyse: field=$n NeedsValidation prim=${nv.primitiveType.asInstanceOf[quotes.reflect.TypeRepr].show} wrapped=${nv.wrappedType.asInstanceOf[quotes.reflect.TypeRepr].show} companion=${nv.companionSymbol.asInstanceOf[quotes.reflect.Symbol].fullName} method=${nv.methodName}")
+              MacroDebugger.log(s"Analyse: field=$n NeedsValidation prim=${nv.primitiveType.asInstanceOf[quotes.reflect.TypeRepr].show} wrapped=${nv.wrappedType.asInstanceOf[quotes.reflect.TypeRepr].show} companion=${nv.companionSymbol.asInstanceOf[quotes.reflect.Symbol].fullName} method=${nv.methodName} nameAnnotated=${nv.isNameAnnotated}")
             } catch { case _: Throwable => MacroDebugger.log(s"Analyse: field=$n NeedsValidation <unprintable>") }
           case nv: ValidatorInfo.NoValidation =>
-            try { MacroDebugger.log(s"Analyse: field=$n NoValidation plain=${nv.plainType.asInstanceOf[quotes.reflect.TypeRepr].show}") } catch { case _: Throwable => MacroDebugger.log(s"Analyse: field=$n NoValidation <unprintable>") }
+            try { MacroDebugger.log(s"Analyse: field=$n NoValidation plain=${nv.plainType.asInstanceOf[quotes.reflect.TypeRepr].show} nameAnnotated=${nv.isNameAnnotated}") } catch { case _: Throwable => MacroDebugger.log(s"Analyse: field=$n NoValidation <unprintable>") }
+          case sv: ValidatorInfo.SeqLikeValidation =>
+            try { MacroDebugger.log(s"Analyse: field=$n SeqLikeValidation elemType=${sv.elemType.asInstanceOf[quotes.reflect.TypeRepr].show} nameAnnotated=${sv.isNameAnnotated}") } catch { case _: Throwable => MacroDebugger.log(s"Analyse: field=$n SeqLikeValidation <unprintable>") }
+          case mv: ValidatorInfo.MapValidation =>
+            try { MacroDebugger.log(s"Analyse: field=$n MapValidation valueType=${mv.valueType.asInstanceOf[quotes.reflect.TypeRepr].show} nameAnnotated=${mv.isNameAnnotated}") } catch { case _: Throwable => MacroDebugger.log(s"Analyse: field=$n MapValidation <unprintable>") }
         }
       }
     } catch { case _: Throwable => MacroDebugger.log("Analyse: failed to log infos") }
@@ -296,7 +322,9 @@ object ValidatedBuilderGenerator {
     if (n > 22) report.errorAndAbort(s"Arity $n > 22")
 
     val hasValidatedFields = infos.exists {
-      case _: ValidatorInfo.NeedsValidation => true
+      case _: ValidatorInfo.NeedsValidation   => true
+      case _: ValidatorInfo.SeqLikeValidation => true  // collection fields always get path enrichment
+      case _: ValidatorInfo.MapValidation     => true
       case _ => false
     }
     val names      = infos.map(_.fieldName)
@@ -311,7 +339,42 @@ object ValidatedBuilderGenerator {
         AppliedType(TypeRepr.of[ValidationPathError[Any]].typeSymbol.typeRef, List(normalizedErrorRepr))
       }
       else euRepr
-    val rType      = ntRepr(names, primTypes)
+    // Post-process: expand collection prim types to also accept Seq[ZValidation[Nothing, E, B]]
+    // (or Map[K, ZValidation[...]]) so the generated setter type accepts both pre-built and
+    // pre-validated inputs.  The expansion uses outputErrorRepr which is only available here.
+    val zvTC  = TypeRepr.of[ZValidation[Nothing, Any, Any]] match {
+      case AppliedType(tc, _) => tc
+      case o => o
+    }
+    val expandedPrimTypes: List[TypeRepr] = primTypes.zip(infos).map {
+      case (base, sv: ValidatorInfo.SeqLikeValidation) =>
+        val collTpe = sv.collectionType.asInstanceOf[TypeRepr]
+        val elemTpe = sv.elemType.asInstanceOf[TypeRepr]
+        collTpe match {
+          case AppliedType(seqTC, _) =>
+            try {
+              val zvTpe    = AppliedType(zvTC,  List(TypeRepr.of[Nothing], outputErrorRepr, elemTpe))
+              val zvSeqTpe = AppliedType(seqTC, List(zvTpe))
+              OrType(base, zvSeqTpe)
+            } catch { case _: Throwable => base }
+          case _ => base
+        }
+      case (base, mv: ValidatorInfo.MapValidation) =>
+        val mapTpe = mv.mapType.asInstanceOf[TypeRepr]
+        val keyTpe = mv.keyType.asInstanceOf[TypeRepr]
+        val valTpe = mv.valueType.asInstanceOf[TypeRepr]
+        mapTpe match {
+          case AppliedType(mapTC, _) =>
+            try {
+              val zvTpe    = AppliedType(zvTC,  List(TypeRepr.of[Nothing], outputErrorRepr, valTpe))
+              val mapZvTpe = AppliedType(mapTC, List(keyTpe, zvTpe))
+              OrType(base, mapZvTpe)
+            } catch { case _: Throwable => base }
+          case _ => base
+        }
+      case (base, _) => base
+    }
+    val rType      = ntRepr(names, expandedPrimTypes)
     val selTC      = TypeRepr.of[ValidatedBuilderSelectable[Any, Any, AnyNamedTuple]].typeSymbol.typeRef
     val selType    = selTC.appliedTo(List(targetTpe, outputErrorRepr, rType))
     val selCtor    = TypeRepr.of[ValidatedBuilderSelectable[Any, Any, AnyNamedTuple]]
@@ -326,7 +389,7 @@ object ValidatedBuilderGenerator {
         case '[p] => wrappedRepr.asType match {
           case '[w] => rawErrorRepr.asType match {
             case '[rawEu] =>
-              val fvBase: Expr[p => ZValidation[Nothing, rawEu, w]] = fieldValidator[p, rawEu, w](info, allowUnion)
+              val fvBase: Expr[p => ZValidation[Nothing, rawEu, w]] = fieldValidator[p, rawEu, w](info, allowUnion, withPath)
               if (withPath && hasValidatedFields) {
                 outputErrorRepr.asType match {
                   case '[outEu] =>
@@ -334,7 +397,9 @@ object ValidatedBuilderGenerator {
                     val pathSegmentsExpr: Expr[Seq[ValidationPathPart]] =
                       '{ ValidationPathSupport.fieldSegments($pathConfig, $fieldNameExpr) }
                     info match {
-                      case _: ValidatorInfo.NoValidation =>
+                      case _: ValidatorInfo.NoValidation
+                         | _: ValidatorInfo.SeqLikeValidation
+                         | _: ValidatorInfo.MapValidation =>
                         '{ (x: Any) => ($fvBase)(x.asInstanceOf[p]).asInstanceOf[ZValidation[Nothing, outEu, w]] }
                       case _: ValidatorInfo.NeedsValidation =>
                         unwrapPathAwareError(rawErrorRepr) match {
@@ -415,7 +480,8 @@ object ValidatedBuilderGenerator {
 
   private def fieldValidator[P: Type, EU: Type, W: Type](using Quotes)(
     info:       ValidatorInfo,
-    allowUnion: Boolean
+    allowUnion: Boolean,
+    withPath:   Boolean
   ): Expr[P => ZValidation[Nothing, EU, W]] = {
     import quotes.reflect.*
 
@@ -533,6 +599,60 @@ object ValidatedBuilderGenerator {
                   '{ (p: P) => ZValidation.succeed(p.asInstanceOf[W]) }
                 }
             }
+        }
+      case sv: ValidatorInfo.SeqLikeValidation =>
+        val fieldNameExpr   = Expr(sv.fieldName)
+        val elemNameExpr    = Expr(sv.elemNameField)
+        val withPathExpr    = Expr(withPath)
+        val extractorExpr: Expr[Any] = sv.elemNameField match {
+          case None => '{ null }
+          case Some(nf) =>
+            val elemTpe = sv.elemType.asInstanceOf[TypeRepr]
+            elemTpe.asType match {
+              case '[elemTy] =>
+                '{ (elem: Any) =>
+                  try {
+                    val e = elem.asInstanceOf[elemTy]
+                    // Use Selectable to extract field by name at runtime
+                    val sel = e.asInstanceOf[scala.reflect.Selectable]
+                    val value = sel.selectDynamic(${ Expr(nf) })
+                    Option(value.toString)
+                  } catch { case _: Throwable => None }
+                }
+              case _ => '{ null }
+            }
+        }
+        '{ (p: P) =>
+          ValidationCollectionSupport
+            .combineSeqField(p.asInstanceOf[Any], $fieldNameExpr, $elemNameExpr, $withPathExpr, $extractorExpr)
+            .asInstanceOf[ZValidation[Nothing, EU, W]]
+        }
+      case mv: ValidatorInfo.MapValidation =>
+        val fieldNameExpr   = Expr(mv.fieldName)
+        val valNameExpr     = Expr(mv.valNameField)
+        val withPathExpr    = Expr(withPath)
+        val extractorExpr: Expr[Any] = mv.valNameField match {
+          case None => '{ null }
+          case Some(nf) =>
+            val valTpe = mv.valueType.asInstanceOf[TypeRepr]
+            valTpe.asType match {
+              case '[valTy] =>
+                '{ (elem: Any) =>
+                  try {
+                    val e = elem.asInstanceOf[valTy]
+                    // Use Selectable to extract field by name at runtime
+                    val sel = e.asInstanceOf[scala.reflect.Selectable]
+                    val value = sel.selectDynamic(${ Expr(nf) })
+                    Option(value.toString)
+                  } catch { case _: Throwable => None }
+                }
+              case _ => '{ null }
+            }
+        }
+        '{ (p: P) =>
+          ValidationCollectionSupport
+            .combineMapField(p.asInstanceOf[Any], $fieldNameExpr, $valNameExpr, $withPathExpr, $extractorExpr)
+            .asInstanceOf[ZValidation[Nothing, EU, W]]
         }
     }
   }
@@ -851,12 +971,20 @@ object ValidatedBuilderGenerator {
     normalizePathAware: Boolean = false
   ): quotes.reflect.TypeRepr = {
     import quotes.reflect.*
-    infos.collect {
-      case nv: ValidatorInfo.NeedsValidation =>
-        val raw = nv.errorType.asInstanceOf[TypeRepr]
-        if (normalizePathAware) unwrapPathAwareError(raw).getOrElse(raw) else raw
-    }
-      .distinct match {
+    infos.flatMap { info =>
+      val raw = info match {
+        case nv: ValidatorInfo.NeedsValidation   => Some(nv.errorType.asInstanceOf[TypeRepr])
+        case sv: ValidatorInfo.SeqLikeValidation =>
+          val e = rawErrorTypeOf(sv.elemInfo)
+          if (e =:= TypeRepr.of[Nothing]) None else Some(e)
+        case mv: ValidatorInfo.MapValidation     =>
+          val e = rawErrorTypeOf(mv.valueInfo)
+          if (e =:= TypeRepr.of[Nothing]) None else Some(e)
+        case _: ValidatorInfo.NoValidation       => None
+      }
+      if (!normalizePathAware) raw
+      else raw.map(r => unwrapPathAwareError(r).getOrElse(r))
+    }.distinct match {
       case Nil      => TypeRepr.of[Nothing]
       case h :: Nil => h
       case hs       => hs.reduce(OrType(_, _))
@@ -866,8 +994,10 @@ object ValidatedBuilderGenerator {
   private def rawErrorTypeOf(using Quotes)(info: ValidatorInfo): quotes.reflect.TypeRepr = {
     import quotes.reflect.*
     info match {
-      case nv: ValidatorInfo.NeedsValidation => nv.errorType.asInstanceOf[TypeRepr]
-      case _: ValidatorInfo.NoValidation => TypeRepr.of[Nothing]
+      case nv: ValidatorInfo.NeedsValidation   => nv.errorType.asInstanceOf[TypeRepr]
+      case _: ValidatorInfo.NoValidation       => TypeRepr.of[Nothing]
+      case sv: ValidatorInfo.SeqLikeValidation => rawErrorTypeOf(sv.elemInfo)
+      case mv: ValidatorInfo.MapValidation     => rawErrorTypeOf(mv.valueInfo)
     }
   }
 
@@ -907,14 +1037,22 @@ object ValidatedBuilderGenerator {
                 }
             }
         }
+      case sv: ValidatorInfo.SeqLikeValidation =>
+        // Base prim type is the raw collection type; union expansion (adding ZValidation form)
+        // happens in buildSel after outputErrorRepr is known.
+        sv.collectionType.asInstanceOf[TypeRepr]
+      case mv: ValidatorInfo.MapValidation =>
+        mv.mapType.asInstanceOf[TypeRepr]
     }
   }
 
   private def fieldTypeOf(using Quotes)(info: ValidatorInfo): quotes.reflect.TypeRepr = {
     import quotes.reflect.*
     info match {
-      case nv: ValidatorInfo.NeedsValidation => nv.wrappedType.asInstanceOf[TypeRepr]
-      case nv: ValidatorInfo.NoValidation    => nv.plainType.asInstanceOf[TypeRepr]
+      case nv: ValidatorInfo.NeedsValidation   => nv.wrappedType.asInstanceOf[TypeRepr]
+      case nv: ValidatorInfo.NoValidation      => nv.plainType.asInstanceOf[TypeRepr]
+      case sv: ValidatorInfo.SeqLikeValidation => sv.collectionType.asInstanceOf[TypeRepr]
+      case mv: ValidatorInfo.MapValidation     => mv.mapType.asInstanceOf[TypeRepr]
     }
   }
 
@@ -1035,6 +1173,26 @@ object ValidatedBuilderGenerator {
             }
         }
     }
+  }
+
+  /** Returns the field name annotated with `@api.Name` in the primary constructor of `tpe`,
+   *  if exactly one such field exists.  Used at macro time to determine whether a
+   *  `ValidationPathPart.Named` segment can be generated for nested collection elements. */
+  private def findNameField(using Quotes)(tpe: quotes.reflect.TypeRepr): Option[String] = {
+    import quotes.reflect.*
+    try {
+      val sym = tpe.typeSymbol
+      if (!sym.flags.is(Flags.Case)) return None
+      val params = sym.primaryConstructor.paramSymss.flatten
+      val nameAnnotationFqn = "api.Name"
+      val marked = params.filter { p =>
+        p.annotations.exists { ann =>
+          try ann.tpe.typeSymbol.fullName == nameAnnotationFqn
+          catch { case _: Throwable => false }
+        }
+      }
+      if (marked.size == 1) Some(marked.head.name) else None
+    } catch { case _: Throwable => None }
   }
 
   private def ntRepr(using Quotes)(names: List[String], types: List[quotes.reflect.TypeRepr]): quotes.reflect.TypeRepr = {

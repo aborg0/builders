@@ -1,6 +1,6 @@
 package models
 
-import api.{ValidatedBuilderGenerator, ValidationPathConfig, ValidationPathError, ValidationPathPart}
+import api.{Name, ValidatedBuilderGenerator, ValidationPathConfig, ValidationPathError, ValidationPathPart}
 import zio.prelude.ZValidation
 
 opaque type PathOp = Int
@@ -40,4 +40,25 @@ final case class PlainPathDummy(name: String, count: Int)
 object PlainPathDummy {
   val validator = ValidatedBuilderGenerator.builder[PlainPathDummy](ValidationPathConfig(customPrefix = Some("plain prefix")))
   val defaultValidator = ValidatedBuilderGenerator.builder[PlainPathDummy]
+}
+
+final case class NamedInner(@Name id: String, value: PathOp)
+
+object NamedInner {
+  val validator = ValidatedBuilderGenerator.builder[NamedInner](ValidationPathConfig(customPrefix = Some("inner prefix")))
+
+  def make(id: String, value: Int): ZValidation[Nothing, ValidationPathError[String], NamedInner] =
+    validator.id(id).value(value)
+}
+
+final case class SeqContainer(name: String, items: Seq[NamedInner])
+
+object SeqContainer {
+  val validator = ValidatedBuilderGenerator.builder[SeqContainer](ValidationPathConfig(customPrefix = Some("seq prefix")))
+}
+
+final case class MapContainer(name: String, parts: Map[String, NamedInner])
+
+object MapContainer {
+  val validator = ValidatedBuilderGenerator.builder[MapContainer](ValidationPathConfig(customPrefix = Some("map prefix")))
 }

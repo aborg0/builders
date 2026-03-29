@@ -55,7 +55,23 @@ object SmartConstructorDiscovery {
         return ValidatorInfo.NoValidation(fieldName, fieldType)
       case _ => ()
     }
-    
+
+    // ── Collection detection (Seq/List/Set/Vector/Map) ──────────────────────────
+    // Must happen BEFORE the general scala.* skip since collection types start with "scala.".
+    fieldType.widen.dealias match {
+      case AppliedType(tc, List(elemType)) if isSeqLikeTC(tc) =>
+        MacroDebugger.log(s"SeqLike detected for $fieldName (${fieldType.show}) — discovering element validator")
+        val elemInfo    = discoverValidator(fieldName, elemType)
+        val nameField   = findNameFieldInType(elemType)
+        return ValidatorInfo.SeqLikeValidation(fieldName, fieldType, elemType, elemInfo, nameField)
+      case AppliedType(tc, List(keyType, valType)) if isMapTC(tc) =>
+        MacroDebugger.log(s"Map detected for $fieldName (${fieldType.show}) — discovering value validator")
+        val valueInfo = discoverValidator(fieldName, valType)
+        val nameField = findNameFieldInType(valType)
+        return ValidatorInfo.MapValidation(fieldName, fieldType, keyType, valType, valueInfo, nameField)
+      case _ => ()
+    }
+
     val typeSymbol = fieldType.typeSymbol
     if (typeSymbol == Symbol.noSymbol) {
       MacroDebugger.log(s"No symbol for field '$fieldName' (${fieldType.show}) — treating as no-validation")
@@ -443,6 +459,43 @@ object SmartConstructorDiscovery {
     // inherited methods from zio.prelude bases on the module under test.
       val result = candidates.view.flatMap(sym => inspectOn(sym, methodName, TypeRepr.of[Any], declaredOnly = directOnly)).headOption
       result
+  }
+
+  // ─── Collection helpers ───────────────────────────────────────────────────────
+
+  private def isSeqLikeTC(using Quotes)(tc: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    val sym = tc.typeSymbol
+    sym == TypeRepr.of[Seq[Any]].typeSymbol ||
+    sym == TypeRepr.of[List[Any]].typeSymbol ||
+    sym == TypeRepr.of[scala.collection.immutable.Set[Any]].typeSymbol ||
+    sym == TypeRepr.of[Vector[Any]].typeSymbol ||
+    sym == TypeRepr.of[scala.collection.Seq[Any]].typeSymbol
+  }
+
+  private def isMapTC(using Quotes)(tc: quotes.reflect.TypeRepr): Boolean = {
+    import quotes.reflect.*
+    tc.typeSymbol == TypeRepr.of[Map[Any, Any]].typeSymbol
+  }
+
+  /** Returns the field name annotated with `@api.Name` in the primary constructor of `tpe`,
+   *  if exactly one such field exists.  Used at macro time to embed Named path segments
+   *  for collection element types that carry identity names. */
+  private[api] def findNameFieldInType(using Quotes)(tpe: quotes.reflect.TypeRepr): Option[String] = {
+    import quotes.reflect.*
+    try {
+      val sym = tpe.typeSymbol
+      if (!sym.flags.is(Flags.Case)) return None
+      val params = sym.primaryConstructor.paramSymss.flatten
+      val nameAnnotationFqn = "api.Name"
+      val marked = params.filter { p =>
+        p.annotations.exists { ann =>
+          try ann.tpe.typeSymbol.fullName == nameAnnotationFqn
+          catch { case _: Throwable => false }
+        }
+      }
+      if (marked.size == 1) Some(marked.head.name) else None
+    } catch { case _: Throwable => None }
   }
 
   /**

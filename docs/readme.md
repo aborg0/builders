@@ -192,7 +192,7 @@ For the same example, the path-aware failure value is:
 ValidationPathError(
   path = Seq(
     ValidationPathPart.Custom("custom prefix"),
-    ValidationPathPart.Name("right")
+    ValidationPathPart.Field("right")
   ),
   error = "43 is not 42."
 )
@@ -203,7 +203,7 @@ For the failing `right(43)` call, the failure path is:
 ```scala
 Seq(
   ValidationPathPart.Custom("custom prefix"),
-  ValidationPathPart.Name("right")
+  ValidationPathPart.Field("right")
 )
 ```
 
@@ -214,9 +214,9 @@ the inner one. For example, a failure in an outer `child` field whose inner buil
 ```scala
 Seq(
   ValidationPathPart.Custom("outer prefix"),
-  ValidationPathPart.Name("child"),
+  ValidationPathPart.Field("child"),
   ValidationPathPart.Custom("inner prefix"),
-  ValidationPathPart.Name("value")
+  ValidationPathPart.Field("value")
 )
 ```
 
@@ -226,3 +226,45 @@ type; it remains `Nothing`.
 For mixed-validator builders, the wrapped error type `E` can be a union. For example, if the
 unified error type is `String | Throwable`, the path-aware error channel becomes
 `ValidationPathError[String | Throwable]`.
+
+#### Collection fields (Seq/List/Set/Vector/Map)
+
+For collection fields whose element/value type is validated, generated setters accept both:
+
+- pre-built collections, for example `Seq[Inner]` or `Map[String, Inner]`
+- pre-validated collections, for example `Seq[ZValidation[Nothing, E, Inner]]` or
+  `Map[String, ZValidation[Nothing, E, Inner]]`
+
+When pre-validated collections fail, element/value failures are enriched with collection path
+segments:
+
+- `ValidationPathPart.Field("items")` for the collection field name
+- `ValidationPathPart.Index(i)` for element position (or iterator order for `Map`)
+- `ValidationPathPart.Named(...)` when available
+
+Examples:
+
+```scala
+Seq(
+  ValidationPathPart.Field("items"),
+  ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+  ValidationPathPart.Named(None),
+  ValidationPathPart.Custom("inner prefix"),
+  ValidationPathPart.Field("value")
+)
+
+Seq(
+  ValidationPathPart.Field("parts"),
+  ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+  ValidationPathPart.Named(None),
+  ValidationPathPart.Named(Some("left")),
+  ValidationPathPart.Custom("inner prefix"),
+  ValidationPathPart.Field("value")
+)
+```
+
+Notes:
+
+- For pre-validated element failures, `Named(None)` is expected when the element value is not
+  available due to validation failure.
+- For `Map`, a second `Named(Some(key.toString))` segment is appended to capture the key.

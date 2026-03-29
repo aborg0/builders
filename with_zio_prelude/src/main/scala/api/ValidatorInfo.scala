@@ -19,12 +19,13 @@ object ValidatorInfo {
    */
   case class NeedsValidation(
     fieldName: String,
-    primitiveType: Any,   // Actually quotes.reflect.TypeRepr
-    wrappedType: Any,      // Actually quotes.reflect.TypeRepr
-    errorType: Any,        // Actually quotes.reflect.TypeRepr
-    companionSymbol: Any,  // Actually quotes.reflect.Symbol
+    primitiveType: Any,      // Actually quotes.reflect.TypeRepr
+    wrappedType: Any,        // Actually quotes.reflect.TypeRepr
+    errorType: Any,          // Actually quotes.reflect.TypeRepr
+    companionSymbol: Any,    // Actually quotes.reflect.Symbol
     methodName: String,
-    validationKind: ValidationKind
+    validationKind: ValidationKind,
+    isNameAnnotated: Boolean = false
   ) extends ValidatorInfo
 
   /**
@@ -32,9 +33,40 @@ object ValidatorInfo {
    */
   case class NoValidation(
     fieldName: String,
-    plainType: Any  // Actually quotes.reflect.TypeRepr
+    plainType: Any,          // Actually quotes.reflect.TypeRepr
+    isNameAnnotated: Boolean = false
   ) extends ValidatorInfo
-  
+
+  /**
+   * A Seq/List/Set/Vector field.  Elements may be pre-built (no per-element validation) or
+   * pre-validated (Seq[ZValidation[Nothing, E, B]]) — the runtime validator discriminates.
+   * `elemInfo` describes how to validate element type B (NoValidation if plain).
+   * `elemNameField` is the @Name-annotated constructor parameter name in B, if present.
+   */
+  case class SeqLikeValidation(
+    fieldName: String,
+    collectionType: Any,           // TypeRepr: full collection type, e.g. List[Inner]
+    elemType: Any,                 // TypeRepr: element type B
+    elemInfo: ValidatorInfo,       // validator for B
+    elemNameField: Option[String] = None,
+    isNameAnnotated: Boolean = false
+  ) extends ValidatorInfo
+
+  /**
+   * A Map[K,V] field.  Values may be pre-built or pre-validated
+   * (Map[K, ZValidation[Nothing, E, V]]).
+   * `valNameField` is the @Name-annotated constructor parameter name in V, if present.
+   */
+  case class MapValidation(
+    fieldName: String,
+    mapType: Any,                  // TypeRepr: Map[K, V]
+    keyType: Any,                  // TypeRepr: K
+    valueType: Any,                // TypeRepr: V
+    valueInfo: ValidatorInfo,      // validator for V
+    valNameField: Option[String] = None,
+    isNameAnnotated: Boolean = false
+  ) extends ValidatorInfo
+
   enum ValidationKind {
     case FromValidation  // Returns ZValidation[_, E, T] directly
     case FromEither      // Returns Either[E, T], needs ZValidation.fromEither

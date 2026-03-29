@@ -27,6 +27,8 @@ Notes and recent changes
     - Trailing optional-like fields can be completed with `.!`.
     - `.!` is compile-time rejected if required fields still remain.
   - Validated builders now also support an opt-in path-aware mode via `ValidationPathConfig`. In that mode the error channel becomes `ValidationPathError[E]` for builders that actually validate fields, and nested validated smart constructors prepend outer path segments while preserving a single path wrapper.
+  - Path-aware validation now includes collection-aware segments for validated collection fields (`Seq`/`List`/`Set`/`Vector`/`Map`): `Field` + `Index`, and `Named` segments when available.
+  - Collection setters accept both pre-built and pre-validated inputs (for example `Seq[A]` and `Seq[ZValidation[Nothing, E, A]]`).
   - In mixed-validator builders, `E` can be a union type (for example `String | Throwable`), resulting in `ValidationPathError[String | Throwable]`.
   - Path configuration is a no-op for all-plain case classes whose error type is already `Nothing`.
 

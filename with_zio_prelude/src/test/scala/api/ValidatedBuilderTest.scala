@@ -1,6 +1,6 @@
 package api
 
-import models.{JavaOptionalDummy, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, Simple, SimpleValidated, TrailingOptionalDummy}
+import models.{JavaOptionalDummy, MapContainer, NamedInner, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, SeqContainer, Simple, SimpleValidated, TrailingOptionalDummy}
 import utest.*
 import playground.Opaque
 import zio.prelude.ZValidation
@@ -126,7 +126,7 @@ object ValidatedBuilderTest extends TestSuite {
       val first = errors.head
       assert(first.path == Seq(
         ValidationPathPart.Custom("custom prefix"),
-        ValidationPathPart.Name("right")
+        ValidationPathPart.Field("right")
       ))
       assert(first.error == "43 is not 42.")
     }
@@ -141,9 +141,9 @@ object ValidatedBuilderTest extends TestSuite {
       val first = errors.head
       assert(first.path == Seq(
         ValidationPathPart.Custom("outer prefix"),
-        ValidationPathPart.Name("child"),
+        ValidationPathPart.Field("child"),
         ValidationPathPart.Custom("inner prefix"),
-        ValidationPathPart.Name("value")
+        ValidationPathPart.Field("value")
       ))
       assert(first.error == "43 is not 42.")
     }
@@ -159,9 +159,9 @@ object ValidatedBuilderTest extends TestSuite {
         ValidationPathError(
           Seq(
             ValidationPathPart.Custom("outer prefix"),
-            ValidationPathPart.Name("child"),
+            ValidationPathPart.Field("child"),
             ValidationPathPart.Custom("inner prefix"),
-            ValidationPathPart.Name("value")
+            ValidationPathPart.Field("value")
           ),
           "41 is not 42."
         )
@@ -170,7 +170,7 @@ object ValidatedBuilderTest extends TestSuite {
         ValidationPathError(
           Seq(
             ValidationPathPart.Custom("outer prefix"),
-            ValidationPathPart.Name("right")
+            ValidationPathPart.Field("right")
           ),
           "43 is not 42."
         )
@@ -184,6 +184,84 @@ object ValidatedBuilderTest extends TestSuite {
       assert(result.isSuccess)
       val built = result.toEither.toOption.get
       assert(built == PlainPathDummy("plain", 2))
+    }
+
+    test("Path-aware Seq field uses index and placeholder Named for failed element") {
+      val one = NamedInner.make("alpha", 41)
+      val two = NamedInner.make("beta", 42)
+
+      val result: ZValidation[Nothing, ValidationPathError[String], SeqContainer] =
+        SeqContainer.validator.name("outer").items(Seq(one, two))
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.size == 1)
+      val first = errors.head
+      assert(first.path == Seq(
+        ValidationPathPart.Field("items"),
+        ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+        ValidationPathPart.Named(None),
+        ValidationPathPart.Custom("inner prefix"),
+        ValidationPathPart.Field("value")
+      ))
+      assert(first.error == "41 is not 42.")
+    }
+
+    test("Path-aware Seq field preserves distinct indexes for multiple failures") {
+      val one = NamedInner.make("alpha", 41)
+      val two = NamedInner.make("beta", 43)
+
+      val result: ZValidation[Nothing, ValidationPathError[String], SeqContainer] =
+        SeqContainer.validator.name("outer").items(Seq(one, two))
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.size == 2)
+      assert(errors.contains(
+        ValidationPathError(
+          Seq(
+            ValidationPathPart.Field("items"),
+            ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+            ValidationPathPart.Named(None),
+            ValidationPathPart.Custom("inner prefix"),
+            ValidationPathPart.Field("value")
+          ),
+          "41 is not 42."
+        )
+      ))
+      assert(errors.contains(
+        ValidationPathError(
+          Seq(
+            ValidationPathPart.Field("items"),
+            ValidationPathPart.Index(ValidationPathIndex.wrap(1)),
+            ValidationPathPart.Named(None),
+            ValidationPathPart.Custom("inner prefix"),
+            ValidationPathPart.Field("value")
+          ),
+          "43 is not 42."
+        )
+      ))
+    }
+
+    test("Path-aware Map field appends key Named segment") {
+      val result: ZValidation[Nothing, ValidationPathError[String], MapContainer] =
+        MapContainer.validator.name("outer").parts(
+          Map("left" -> NamedInner.make("alpha", 41))
+        )
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.size == 1)
+      val first = errors.head
+      assert(first.path == Seq(
+        ValidationPathPart.Field("parts"),
+        ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+        ValidationPathPart.Named(None),
+        ValidationPathPart.Named(Some("left")),
+        ValidationPathPart.Custom("inner prefix"),
+        ValidationPathPart.Field("value")
+      ))
+      assert(first.error == "41 is not 42.")
     }
 
     test("builder accepts raw and None for Option fields") {

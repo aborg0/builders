@@ -15,8 +15,9 @@ final case class ValidationPathConfig(
 
 enum ValidationPathPart {
   case Custom(prefix: String)
-  case Name(name: String)
+  case Field(name: String)
   case Index(zeroIndex: ValidationPathIndex)
+  case Named(name: Option[String])
 }
 
 final case class ValidationPathError[+E](path: Seq[ValidationPathPart], error: E)
