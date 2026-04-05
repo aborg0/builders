@@ -673,60 +673,18 @@ object ValidatedBuilderGenerator {
     val n      = fieldTypes.length
     val companionModuleSym = targetSym.companionModule
     try MacroDebugger.log(s"buildCombine: targetSym=${targetSym.fullName} companionModule=${companionModuleSym.fullName}") catch { case _: Throwable => () }
-    // local search for an accessible 'apply' declared on the companion or related modules
-    val applyM_opt_local: Option[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = try {
-      import quotes.reflect.*
-      def methodsOf(sym: Symbol): List[Symbol] = try sym.declaredMethods.toList catch { case _: Throwable => List.empty }
-      val candidates: List[Symbol] = {
-        val base = companionModuleSym
-        val modClassCompanion = try if (companionModuleSym.moduleClass.exists) companionModuleSym.moduleClass.companionModule else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
-        val req1 = try Symbol.requiredModule(companionModuleSym.fullName) catch { case _: Throwable => Symbol.noSymbol }
-        val req2 = try Symbol.requiredModule(companionModuleSym.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
-        val req3 = try Symbol.requiredModule(companionModuleSym.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
-        val ownerBased = try Symbol.requiredModule(companionModuleSym.owner.fullName + "." + companionModuleSym.name) catch { case _: Throwable => Symbol.noSymbol }
-        List(base, modClassCompanion, req1, req2, req3, ownerBased).filter(s => s != Symbol.noSymbol).distinct
-      }
-      // For each candidate, collect its methods and pair method -> owner
-      val methodOwnerPairs: List[(Symbol, Symbol)] = candidates.flatMap { cand =>
-        methodsOf(cand).map(m => (m, cand)) ++
-        (try if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty catch { case _: Throwable => List.empty })
-      }
-      val accessible = methodOwnerPairs.filter { case (m, owner) => m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected) }
-      accessible.headOption
-    } catch { case _: Throwable => None }
-    val (applyM, applyOwner) = applyM_opt_local.getOrElse({
-      try {
-        val objNames = try companionModuleSym.declaredMethods.map(_.name).mkString(",") catch { case _: Throwable => "<error>" }
-        val classNames = try if (companionModuleSym.moduleClass.exists) companionModuleSym.moduleClass.declaredMethods.map(_.name).mkString(",") else "<no moduleClass>" catch { case _: Throwable => "<error>" }
-        MacroDebugger.log(s"apply lookup failed: companion=${companionModuleSym.fullName} objMethods=$objNames classMethods=$classNames")
-      } catch { case _: Throwable => () }
-      report.errorAndAbort(s"Could not find accessible 'apply' on companion ${companionModuleSym.fullName}")
-    })
-    try MacroDebugger.log(s"buildCombine: selected apply owner=${applyOwner.fullName} applySym=${applyM.name}") catch { case _: Throwable => () }
-    val applyMethodOwnerPairs: List[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = try {
-      def methodsOf(sym: Symbol): List[Symbol] = try sym.declaredMethods.toList catch { case _: Throwable => List.empty }
-      val candidates: List[Symbol] = {
-        val base = companionModuleSym
-        val modClassCompanion = try if (companionModuleSym.moduleClass.exists) companionModuleSym.moduleClass.companionModule else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
-        val req1 = try Symbol.requiredModule(companionModuleSym.fullName) catch { case _: Throwable => Symbol.noSymbol }
-        val req2 = try Symbol.requiredModule(companionModuleSym.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
-        val req3 = try Symbol.requiredModule(companionModuleSym.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
-        val ownerBased = try Symbol.requiredModule(companionModuleSym.owner.fullName + "." + companionModuleSym.name) catch { case _: Throwable => Symbol.noSymbol }
-        List(base, modClassCompanion, req1, req2, req3, ownerBased).filter(s => s != Symbol.noSymbol).distinct
-      }
-      candidates.flatMap { cand =>
-        methodsOf(cand).map(m => (m, cand)) ++
-        (try if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty catch { case _: Throwable => List.empty })
-      }.filter { case (m, _) => m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected) }
-    } catch { case _: Throwable => Nil }
+    val applyMethodOwnerPairs = findAccessibleApplyMethods(companionModuleSym)
+    selectApplyMethodForArity(companionModuleSym, applyMethodOwnerPairs, None).foreach {
+      case (applyM, applyOwner) =>
+        try MacroDebugger.log(s"buildCombine: selected apply owner=${applyOwner.fullName} applySym=${applyM.name}") catch { case _: Throwable => () }
+    }
     def applyOnCompanion(args: List[quotes.reflect.Term]): quotes.reflect.Term = {
-      val applyMethodAndOwner = applyMethodOwnerPairs.find { case (methodSym, _) =>
-        try methodSym.paramSymss.flatten.length == args.length catch { case _: Throwable => false }
-      }.orElse(applyMethodOwnerPairs.headOption).getOrElse {
-        report.errorAndAbort(s"Could not resolve companion apply overload for ${companionModuleSym.fullName} with arity ${args.length}")
+      selectApplyMethodForArity(companionModuleSym, applyMethodOwnerPairs, Some(args.length)) match {
+        case Some((applyMethod, applyOwner)) =>
+          Ref(applyOwner).select(applyMethod).appliedToArgs(args)
+        case None =>
+          buildPrimaryConstructorCall(targetSym, args)
       }
-      val (applyMethod, applyOwner) = applyMethodAndOwner
-      Ref(applyOwner).select(applyMethod).appliedToArgs(args)
     }
     euRepr.asType match {
       case '[eu] => targetTpe.asType match {
@@ -778,57 +736,13 @@ object ValidatedBuilderGenerator {
     fieldTypes: List[quotes.reflect.TypeRepr]
   ): Expr[Array[Any] => T] = {
     import quotes.reflect.*
-    val companionModuleSym2 = targetSym.companionModule
-    val applyPairOpt2: Option[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = try {
-      import quotes.reflect.*
-      def methodsOf(sym: Symbol): List[Symbol] = try sym.declaredMethods.toList catch { case _: Throwable => List.empty }
-      val candidates: List[Symbol] = {
-        val base = companionModuleSym2
-        val modClassCompanion = try if (companionModuleSym2.moduleClass.exists) companionModuleSym2.moduleClass.companionModule else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
-        val req1 = try Symbol.requiredModule(companionModuleSym2.fullName) catch { case _: Throwable => Symbol.noSymbol }
-        val req2 = try Symbol.requiredModule(companionModuleSym2.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
-        val req3 = try Symbol.requiredModule(companionModuleSym2.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
-        val ownerBased = try Symbol.requiredModule(companionModuleSym2.owner.fullName + "." + companionModuleSym2.name) catch { case _: Throwable => Symbol.noSymbol }
-        List(base, modClassCompanion, req1, req2, req3, ownerBased).filter(s => s != Symbol.noSymbol).distinct
-      }
-      val methodOwnerPairs: List[(Symbol, Symbol)] = candidates.flatMap { cand =>
-        methodsOf(cand).map(m => (m, cand)) ++
-        (try if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty catch { case _: Throwable => List.empty })
-      }
-      val accessible = methodOwnerPairs.filter { case (m, owner) => m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected) }
-      accessible.headOption
-    } catch { case _: Throwable => None }
-    val (applyM, applyOwner) = applyPairOpt2.getOrElse({
-      try {
-        val objNames = try companionModuleSym2.declaredMethods.map(_.name).mkString(",") catch { case _: Throwable => "<error>" }
-        val classNames = try if (companionModuleSym2.moduleClass.exists) companionModuleSym2.moduleClass.declaredMethods.map(_.name).mkString(",") else "<no moduleClass>" catch { case _: Throwable => "<error>" }
-        MacroDebugger.log(s"apply lookup failed (buildApply): companion=${companionModuleSym2.fullName} objMethods=$objNames classMethods=$classNames")
-      } catch { case _: Throwable => () }
-      report.errorAndAbort(s"Could not find accessible 'apply' on companion ${companionModuleSym2.fullName}")
-    })
-    try MacroDebugger.log(s"buildApply: selected apply owner=${applyOwner.fullName} applySym=${applyM.name}") catch { case _: Throwable => () }
-    val applyMethodOwnerPairs: List[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = try {
-      def methodsOf(sym: Symbol): List[Symbol] = try sym.declaredMethods.toList catch { case _: Throwable => List.empty }
-      val candidates: List[Symbol] = {
-        val base = companionModuleSym2
-        val modClassCompanion = try if (companionModuleSym2.moduleClass.exists) companionModuleSym2.moduleClass.companionModule else Symbol.noSymbol catch { case _: Throwable => Symbol.noSymbol }
-        val req1 = try Symbol.requiredModule(companionModuleSym2.fullName) catch { case _: Throwable => Symbol.noSymbol }
-        val req2 = try Symbol.requiredModule(companionModuleSym2.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
-        val req3 = try Symbol.requiredModule(companionModuleSym2.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
-        val ownerBased = try Symbol.requiredModule(companionModuleSym2.owner.fullName + "." + companionModuleSym2.name) catch { case _: Throwable => Symbol.noSymbol }
-        List(base, modClassCompanion, req1, req2, req3, ownerBased).filter(s => s != Symbol.noSymbol).distinct
-      }
-      candidates.flatMap { cand =>
-        methodsOf(cand).map(m => (m, cand)) ++
-        (try if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty catch { case _: Throwable => List.empty })
-      }.filter { case (m, _) => m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected) }
-    } catch { case _: Throwable => Nil }
-    val applyMethodForArityN: (quotes.reflect.Symbol, quotes.reflect.Symbol) =
-      applyMethodOwnerPairs.find { case (methodSym, _) =>
-        try methodSym.paramSymss.flatten.length == n catch { case _: Throwable => false }
-      }.orElse(applyMethodOwnerPairs.headOption).getOrElse {
-        report.errorAndAbort(s"Could not resolve companion apply overload for ${companionModuleSym2.fullName} with arity $n")
-      }
+    val companionModuleSym = targetSym.companionModule
+    val applyMethodOwnerPairs = findAccessibleApplyMethods(companionModuleSym)
+    selectApplyMethodForArity(companionModuleSym, applyMethodOwnerPairs, None).foreach {
+      case (applyM, applyOwner) =>
+        try MacroDebugger.log(s"buildApply: selected apply owner=${applyOwner.fullName} applySym=${applyM.name}") catch { case _: Throwable => () }
+    }
+    val applyMethodForArityN = selectApplyMethodForArity(companionModuleSym, applyMethodOwnerPairs, Some(n))
     val lam = Lambda(
       Symbol.spliceOwner,
       MethodType(List("args"))(_ => List(TypeRepr.of[Array[Any]]), _ => TypeRepr.of[T]),
@@ -839,11 +753,95 @@ object ValidatedBuilderGenerator {
             .find(_.name == "apply").get), List(Literal(IntConstant(i))))
           Typed(elem, Inferred(ft))
         }
-        val (applyMethod, applyOwner) = applyMethodForArityN
-        Ref(applyOwner).select(applyMethod).appliedToArgs(argTerms)
+        applyMethodForArityN match {
+          case Some((applyMethod, applyOwner)) =>
+            Ref(applyOwner).select(applyMethod).appliedToArgs(argTerms)
+          case None =>
+            buildPrimaryConstructorCall(targetSym, argTerms)
+        }
       }
     )
     lam.asExprOf[Array[Any] => T]
+  }
+
+  private def buildPrimaryConstructorCall(using Quotes)(
+    targetSym: quotes.reflect.Symbol,
+    args: List[quotes.reflect.Term]
+  ): quotes.reflect.Term = {
+    import quotes.reflect.*
+
+    val ctor = targetSym.primaryConstructor
+    Apply(Select(New(TypeIdent(targetSym)), ctor), args)
+  }
+
+  private def companionCandidates(using Quotes)(companionModuleSym: quotes.reflect.Symbol): List[quotes.reflect.Symbol] = {
+    import quotes.reflect.*
+
+    val modClassCompanion =
+      try if (companionModuleSym.moduleClass.exists) companionModuleSym.moduleClass.companionModule else Symbol.noSymbol
+      catch { case _: Throwable => Symbol.noSymbol }
+    val req1 = try Symbol.requiredModule(companionModuleSym.fullName) catch { case _: Throwable => Symbol.noSymbol }
+    val req2 = try Symbol.requiredModule(companionModuleSym.fullName + "$") catch { case _: Throwable => Symbol.noSymbol }
+    val req3 = try Symbol.requiredModule(companionModuleSym.fullName.stripSuffix("$")) catch { case _: Throwable => Symbol.noSymbol }
+    val ownerBased = try Symbol.requiredModule(companionModuleSym.owner.fullName + "." + companionModuleSym.name) catch { case _: Throwable => Symbol.noSymbol }
+
+    List(companionModuleSym, modClassCompanion, req1, req2, req3, ownerBased)
+      .filter(_ != Symbol.noSymbol)
+      .distinct
+  }
+
+  private def findAccessibleApplyMethods(using Quotes)(companionModuleSym: quotes.reflect.Symbol): List[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = {
+    import quotes.reflect.*
+
+    try {
+      def methodsOf(sym: Symbol): List[Symbol] =
+        try sym.declaredMethods.toList
+        catch { case _: Throwable => List.empty }
+
+      companionCandidates(companionModuleSym)
+        .flatMap { cand =>
+          methodsOf(cand).map(m => (m, cand)) ++
+          (try {
+            if (cand.moduleClass.exists) methodsOf(cand.moduleClass).map(m => (m, cand)) else List.empty
+          } catch {
+            case _: Throwable => List.empty
+          })
+        }
+        .filter { case (m, _) =>
+          m.name == "apply" && !m.flags.is(Flags.Private) && !m.flags.is(Flags.Protected)
+        }
+    } catch {
+      case _: Throwable => Nil
+    }
+  }
+
+  private def selectApplyMethodForArity(using Quotes)(
+    companionModuleSym: quotes.reflect.Symbol,
+    applyMethodOwnerPairs: List[(quotes.reflect.Symbol, quotes.reflect.Symbol)],
+    arity: Option[Int]
+  ): Option[(quotes.reflect.Symbol, quotes.reflect.Symbol)] = {
+    import quotes.reflect.*
+
+    if (applyMethodOwnerPairs.isEmpty) {
+      val objNames =
+        try companionModuleSym.declaredMethods.map(_.name).mkString(",")
+        catch { case _: Throwable => "<error>" }
+      val classNames =
+        try if (companionModuleSym.moduleClass.exists) companionModuleSym.moduleClass.declaredMethods.map(_.name).mkString(",") else "<no moduleClass>"
+        catch { case _: Throwable => "<error>" }
+      MacroDebugger.log(s"apply lookup failed: companion=${companionModuleSym.fullName} objMethods=$objNames classMethods=$classNames")
+      None
+    } else {
+      arity match {
+        case Some(expectedArity) =>
+          applyMethodOwnerPairs.find { case (methodSym, _) =>
+            try methodSym.paramSymss.flatten.length == expectedArity
+            catch { case _: Throwable => false }
+          }.orElse(applyMethodOwnerPairs.headOption)
+        case None =>
+          applyMethodOwnerPairs.headOption
+      }
+    }
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1173,26 +1171,6 @@ object ValidatedBuilderGenerator {
             }
         }
     }
-  }
-
-  /** Returns the field name annotated with `@api.Name` in the primary constructor of `tpe`,
-   *  if exactly one such field exists.  Used at macro time to determine whether a
-   *  `ValidationPathPart.Named` segment can be generated for nested collection elements. */
-  private def findNameField(using Quotes)(tpe: quotes.reflect.TypeRepr): Option[String] = {
-    import quotes.reflect.*
-    try {
-      val sym = tpe.typeSymbol
-      if (!sym.flags.is(Flags.Case)) return None
-      val params = sym.primaryConstructor.paramSymss.flatten
-      val nameAnnotationFqn = "api.Name"
-      val marked = params.filter { p =>
-        p.annotations.exists { ann =>
-          try ann.tpe.typeSymbol.fullName == nameAnnotationFqn
-          catch { case _: Throwable => false }
-        }
-      }
-      if (marked.size == 1) Some(marked.head.name) else None
-    } catch { case _: Throwable => None }
   }
 
   private def ntRepr(using Quotes)(names: List[String], types: List[quotes.reflect.TypeRepr]): quotes.reflect.TypeRepr = {

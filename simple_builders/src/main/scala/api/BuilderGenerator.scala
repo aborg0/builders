@@ -59,16 +59,15 @@ object BuilderGeneratorSimplest {
 
     val tpe        = TypeRepr.of[T]
     val typeSymbol = tpe.typeSymbol
-  
+
     // Determine arity from the primary constructor term parameters
-        val ctorSym         = typeSymbol.primaryConstructor
+    val ctorSym = typeSymbol.primaryConstructor
     // For generic case classes, the first param list may be type params (non-term).
     // Pick the first non-empty list of term params.
-    val termParamLists  = ctorSym.paramSymss.map(_.filter(_.isTerm)).filter(_.nonEmpty)
-    val arity: Int      = termParamLists.headOption.map(_.length).getOrElse {
+    val termParamLists = ctorSym.paramSymss.map(_.filter(_.isTerm)).filter(_.nonEmpty)
+    val arity: Int = termParamLists.headOption.map(_.length).getOrElse {
       report.errorAndAbort(s"Could not determine constructor arity for ${tpe.show}")
     }
-
 
     // Summon product mirror for T (case classes have these)
     val mirrorProd: Expr[Mirror.ProductOf[T]] =

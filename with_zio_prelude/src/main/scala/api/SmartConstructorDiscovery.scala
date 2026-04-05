@@ -6,13 +6,34 @@ import scala.quoted.*
 import api.ValidatorInfo.*
 
 object MacroDebugger {
+  private val debugEnabled: Boolean =
+    sys.props.contains("builders.debug")
+
   private val logFilePath = "macro_debug.log"
-  // Use append mode
-  private val writer = new PrintWriter(new BufferedWriter(new FileWriter(logFilePath, true)))
+  // Create the writer lazily and only when debug mode is enabled.
+  private lazy val writerOpt: Option[PrintWriter] =
+    if (debugEnabled) {
+      Some(new PrintWriter(new BufferedWriter(new FileWriter(logFilePath, true))))
+    } else {
+      None
+    }
+
+  def enabled: Boolean = debugEnabled
 
   def log(msg: String): Unit = synchronized {
-    writer.println(s"[${Instant.now}] $msg")
-    writer.flush()
+    if (debugEnabled) {
+      writerOpt.foreach { writer =>
+        writer.println(s"[${Instant.now}] $msg")
+        writer.flush()
+      }
+    }
+  }
+
+  def info(using Quotes)(msg: String): Unit = {
+    if (debugEnabled) {
+      import quotes.reflect.*
+      report.info(msg)
+    }
   }
 }
 
@@ -123,7 +144,7 @@ object SmartConstructorDiscovery {
           } catch { case _: Throwable => owner }
         }
         MacroDebugger.log(s"Detected wrapped alias Type; using companion candidate ${moduleCandidate.fullName} for field $fieldName (original dealiased show: ${ftShow})")
-        try { report.info(s"SmartConstructorDiscovery: wrapper Type detected; companionCandidate=${moduleCandidate.fullName} for field=$fieldName") } catch { case _: Throwable => () }
+        try { MacroDebugger.info(s"SmartConstructorDiscovery: wrapper Type detected; companionCandidate=${moduleCandidate.fullName} for field=$fieldName") } catch { case _: Throwable => () }
         val found = findValidationMethod(moduleCandidate, fieldType, fieldName)
         if (found.isDefined) return found.get
         // findValidationMethod failed — this can happen for locally-defined Newtype/Subtype where
@@ -287,12 +308,12 @@ object SmartConstructorDiscovery {
 
         MacroDebugger.log(s"  Using companion module: ${companionModule.fullName}")
         try {
-          report.info(s"SmartConstructorDiscovery: using companion module ${companionModule.fullName} for field ${fieldName}")
+          MacroDebugger.info(s"SmartConstructorDiscovery: using companion module ${companionModule.fullName} for field ${fieldName}")
         } catch { case _: Throwable => () }
         findValidationMethod(companionModule, fieldType, fieldName) match {
           case Some(info) =>
             MacroDebugger.log(s"  Found validation for $fieldName: ${info.methodName}")
-            try { report.info(s"SmartConstructorDiscovery: found validation for ${fieldName}; method=${info.methodName}") } catch { case _: Throwable => () }
+            try { MacroDebugger.info(s"SmartConstructorDiscovery: found validation for ${fieldName}; method=${info.methodName}") } catch { case _: Throwable => () }
             info
           case None =>
             MacroDebugger.log(s"  No validation method found in companion '${companionModule.fullName}' for $fieldName")
@@ -300,7 +321,7 @@ object SmartConstructorDiscovery {
         }
       case None =>
         MacroDebugger.log(s"  No companion object could be resolved for $fieldName.")
-        try { report.info(s"SmartConstructorDiscovery: no companion object for ${fieldName} (${fieldType.show})") } catch { case _: Throwable => () }
+        try { MacroDebugger.info(s"SmartConstructorDiscovery: no companion object for ${fieldName} (${fieldType.show})") } catch { case _: Throwable => () }
         ValidatorInfo.NoValidation(fieldName, fieldType)
     }
   }

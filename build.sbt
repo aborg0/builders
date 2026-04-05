@@ -25,11 +25,11 @@ lazy val root = (project in file("."))
 
 lazy val docs = project       // new documentation project
   .in(file("builders_docs")) // important: it must not be docs/
-  .dependsOn(simpleBuilders)
   .settings(
     // docs should not be published as an artifact
     publish / skip := true,
-  ).dependsOn(simpleBuilders, withPrelude)
+  )
+  .dependsOn(simpleBuilders, withPrelude)
   .enablePlugins(MdocPlugin)
 
 lazy val withPrelude = project
@@ -42,10 +42,10 @@ lazy val withPrelude = project
       "com.lihaoyi" %% "utest" % "0.9.5" % "test", // Scala-JVM
     ),
     scalacOptions ++= Seq(
-      "--feature",
-      "--deprecation",
-      "--unchecked",
-      "no-indent"
+      "-feature",
+      "-deprecation",
+      "-unchecked",
+      "-no-indent"
     ),
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
@@ -53,9 +53,6 @@ lazy val withPrelude = project
 
 lazy val removeFix = project
   .in(file("remove_fix"))
-  .settings(
-
-  )
   .dependsOn(simpleBuilders)
 
 // JMH microbenchmarks project

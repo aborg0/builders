@@ -12,7 +12,6 @@ Local quick commands
 Run all tests locally for all supported Scala versions:
 
 ```powershell
-cd C:\Users\Gabor_Bakos\IdeaProjects\builders
 sbt +test
 ```
 
