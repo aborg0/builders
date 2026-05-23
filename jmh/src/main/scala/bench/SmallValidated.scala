@@ -1,0 +1,29 @@
+package bench
+
+import playground._
+import zio.prelude.Validation
+
+final case class SmallValidated(i: Int, op: Opaque.Op, v: Opaque.ValidOp)
+
+object SmallValidatedManual {
+  // Manual builder that mirrors the chained builder API used by the generated builders:
+  // manual.i(42).op("Op").v("Op") => Validation[String, SmallValidated]
+  def apply() = new Builder()
+
+  class Builder {
+    def i(i: Int) = new LevelI(i)
+  }
+
+  class LevelI(i: Int) {
+    def op(op: String) = new LevelOp(i, op)
+  }
+
+  class LevelOp(i: Int, op: String) {
+    def v(v: String): Validation[String, SmallValidated] =
+      Validation.validateWith(
+        Validation.succeed(i),
+        Validation.fromEither(Opaque.Op(op)),
+        Opaque.ValidOp(v)
+      )((ii, oop, vv) => SmallValidated(ii, oop, vv))
+  }
+}
