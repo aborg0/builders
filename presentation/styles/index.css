@@ -1,0 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg-0: #f4f1e8;
+  --bg-1: #efe7d4;
+  --ink: #17211f;
+  --muted: #5c665f;
+  --accent: #0f766e;
+  --accent-2: #be6d00;
+  --panel: #fffaf0;
+}
+
+.slidev-layout {
+  font-family: 'Space Grotesk', sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(1000px 500px at -10% -20%, #d6e4db 0%, transparent 60%),
+    radial-gradient(800px 400px at 110% 120%, #f0d9bb 0%, transparent 65%),
+    linear-gradient(145deg, var(--bg-0), var(--bg-1));
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+p,
+li {
+  color: var(--ink);
+}
+
+code,
+pre,
+.shiki {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.slidev-layout :not(pre) > code {
+  color: #083b39;
+  background: #d7ece8;
+  border: 1px solid #9fc7c1;
+  border-radius: 6px;
+  padding: 0.08em 0.28em;
+  font-weight: 600;
+}
+
+strong {
+  color: var(--accent);
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+
+.panel {
+  background: color-mix(in oklab, var(--panel) 90%, white 10%);
+  border: 1px solid #d4cfbf;
+  border-radius: 12px;
+  padding: 0.9rem;
+}
+
+.kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
