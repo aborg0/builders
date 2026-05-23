@@ -7,7 +7,7 @@ import api.ValidatorInfo.*
 
 object MacroDebugger {
   private val debugEnabled: Boolean =
-    sys.props.contains("builders.debug")
+    sys.props.contains("builders.macro.debug")
 
   private val logFilePath = "macro_debug.log"
   // Create the writer lazily and only when debug mode is enabled.

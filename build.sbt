@@ -1,7 +1,7 @@
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
 ThisBuild / scalaVersion := "3.7.4"
-ThisBuild / crossScalaVersions := Seq("3.7.4", "3.8.1")
+ThisBuild / crossScalaVersions := Seq("3.7.4", "3.8.3")
 
 // A new simple_builders subproject holds the sources previously at the root `src` directory.
 lazy val simpleBuilders = (project in file("simple_builders"))
