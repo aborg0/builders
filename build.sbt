@@ -1,3 +1,5 @@
+import _root_.scalafix.sbt.ScalafixPlugin.autoImport._
+
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
 ThisBuild / scalaVersion := "3.7.4"
@@ -15,9 +17,16 @@ lazy val simpleBuilders = (project in file("simple_builders"))
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
 
+lazy val configuration = (project in file("configuration"))
+  .settings(
+    name := "builders-configuration",
+    libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.5" % "test",
+    testFrameworks += new TestFramework("utest.runner.Framework")
+  )
+
 // The root project is now an empty aggregator. It does not publish; subprojects are the real modules.
 lazy val root = (project in file("."))
-  .aggregate(simpleBuilders, withPrelude, removeFix, docs)
+  .aggregate(simpleBuilders, configuration, withPrelude, removeFix, docs)
   .settings(
     name := "builders-root",
     publish / skip := true
@@ -53,7 +62,24 @@ lazy val withPrelude = project
 
 lazy val removeFix = project
   .in(file("remove_fix"))
-  .dependsOn(simpleBuilders)
+  .settings(
+    name := "builders-scalafix-rules",
+    scalaVersion := "2.13.17",
+    libraryDependencies ++= Seq(
+      "ch.epfl.scala" %% "scalafix-core" % "0.14.4",
+      "ch.epfl.scala" % "scalafix-testkit_2.13.17" % "0.14.4" % "test",
+      compilerPlugin("org.scalameta" % "semanticdb-scalac_2.13.17" % "4.17.0" % "test"),
+      "com.lihaoyi" %% "utest" % "0.9.5" % "test"
+    ),
+    Test / unmanagedSourceDirectories += (baseDirectory.value / "src" / "test" / "resources" / "testkit" / "GenerateBuildersRuleSemanticSuite" / "input"),
+    Test / scalacOptions ++= Seq(
+      "-Yrangepos",
+      "-Xplugin-require:semanticdb",
+      s"-P:semanticdb:targetroot:${(Test / classDirectory).value.getAbsolutePath}",
+      s"-P:semanticdb:sourceroot:${(baseDirectory.value / "src" / "test" / "resources" / "testkit").getAbsolutePath}"
+    ),
+    testFrameworks += new TestFramework("utest.runner.Framework")
+  )
 
 // JMH microbenchmarks project
 lazy val jmh = project
@@ -71,6 +97,24 @@ lazy val jmh = project
     // import sbtjmh.JmhPlugin.autoImport._ is not required here; users can pass args to jmh:run
   )
   .dependsOn(withPrelude, simpleBuilders)
+
+lazy val example = project
+  .in(file("example"))
+  .settings(
+    name := "builders-example",
+    publish / skip := true,
+    scalaVersion := "3.7.4",
+    libraryDependencies ++= Seq(
+      "com.lihaoyi" %% "utest" % "0.9.5" % Test,
+      "dev.zio" %% "zio-prelude" % "1.0.0-RC47",
+    ),
+    semanticdbEnabled := true,
+    Compile / scalacOptions += "-Xsemanticdb",
+    // Compile / scalacOptions += s"-sourceroot:${baseDirectory.value.getCanonicalPath}",
+    scalafixDependencies += "builders-scalafix-rules" % "builders-scalafix-rules_2.13" % "0.1.0-SNAPSHOT",
+    testFrameworks += new TestFramework("utest.runner.Framework")
+  )
+  .dependsOn(configuration)
 
 // Add minimal GitHub Packages publishing configuration.
 // It reads repository and credentials from environment variables provided by GitHub Actions

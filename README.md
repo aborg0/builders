@@ -2,13 +2,33 @@
 
 This repository contains the builders projects and documentation. The CI builds across multiple JDKs and Scala versions and publishes artifacts to GitHub Packages.
 
+Configuration Artifact (Scalafix)
+---------------------------------
+
+The repository now includes a dedicated `configuration` subproject (`builders-configuration`).
+This module contains only user-facing annotation and enum configuration APIs for builder generation.
+
+Design intent:
+- End users should depend on the configuration artifact plus the Scalafix rules artifact.
+- End users should not need to depend on the runtime builder generator modules to configure generation.
+- The annotation model uses enums (not string literals) to keep configuration explicit and type-safe.
+
+Current implementation snapshot:
+- `builders.configuration.GenerateBuilder` annotation added.
+- Option enums added for style/policies/merge/stale-check behavior, including simple optional-value strategy controls.
+- `remove_fix` is now a Scala 2.13 Scalafix rule module (required by available Scalafix artifacts).
+- `remove_fix` contains:
+  - `GenerateBuildersRule` (semantic Scalafix rule entrypoint)
+  - option decoder with exhaustive option-decoding tests
+  - golden and option-matrix rewrite tests for `simple`, `validating`, and `effect` generation styles
+
 Docs
 -----
 
-Check [builder_docs/target/mdoc/readme.md](builders_docs/target/mdoc/readme.md), in case it does not exist, generate it with:
+Check [builders_docs/target/mdoc/readme.md](builders_docs/target/mdoc/readme.md), in case it does not exist, generate it with:
 
 ```sbt
-docs/mdoc
+--no-colors docs/mdoc
 ```
 
 You can check the non-evaluated documentation at [docs/readme.md](docs/readme.md) as well.
