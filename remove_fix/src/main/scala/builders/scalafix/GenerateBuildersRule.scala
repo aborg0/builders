@@ -2,10 +2,7 @@ package builders.scalafix
 
 import scala.meta._
 import scalafix.v1._
-import java.nio.file.{Files, Path, Paths}
-import scala.jdk.CollectionConverters._
-import scala.util.matching.Regex
-import scala.util.Try
+import java.nio.file.{Path, Paths}
 
 class GenerateBuildersRule extends SemanticRule("GenerateBuildersRule") {
   override def fix(implicit doc: SemanticDocument): Patch = {
@@ -19,7 +16,7 @@ class GenerateBuildersRule extends SemanticRule("GenerateBuildersRule") {
       } else {
         val args = annotationArguments(cls)
         val decoded = GenerateBuilderAnnotationDecoder.decode(args).toOption.getOrElse(DecodedGenerateBuilder.default)
-        val fields = classFields(cls, sourceDir)
+        val fields = classFields(cls, sourceDir, decoded)
         val generated = GenerateBuilderCompanionRenderer.render(className, fields, decoded)
         existingObjects.get(className) match {
           case None =>
@@ -72,71 +69,20 @@ class GenerateBuildersRule extends SemanticRule("GenerateBuildersRule") {
     }.getOrElse(Map.empty)
   }
 
-  private def classFields(cls: Defn.Class, sourceDir: Option[Path]): List[GenerateBuilderCompanionRenderer.ClassField] = {
+  private def classFields(cls: Defn.Class, sourceDir: Option[Path], options: DecodedGenerateBuilder): List[GenerateBuilderCompanionRenderer.ClassField] = {
     cls.ctor.paramClauses.flatMap(_.values).toList.map { param =>
       val fieldName = param.name.value
       val fieldType = param.decltpe.map(_.syntax).getOrElse("Any")
       val defaultExpr = param.default.map(_.syntax)
-      val smartMethodName = discoverSmartCtorMethod(fieldType, sourceDir)
-      GenerateBuilderCompanionRenderer.ClassField(fieldName, fieldType, smartMethodName, defaultExpr)
+      val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromPath(fieldType, sourceDir, options.smartConstructorMode)
+      GenerateBuilderCompanionRenderer.ClassField(
+        fieldName,
+        fieldType,
+        smartCtorMethodName = discoveredSmartCtor.map(_.methodName),
+        smartCtorResultKind = discoveredSmartCtor.map(_.resultKind),
+        smartCtorInputTypeExpr = discoveredSmartCtor.flatMap(_.inputTypeExpr),
+        defaultExpr = defaultExpr
+      )
     }
-  }
-
-  private def discoverSmartCtorMethod(fieldTypeExpr: String, sourceDir: Option[Path]): Option[String] = {
-    val normalized = fieldTypeExpr.trim
-    val bareTypePattern = """^[A-Za-z_][A-Za-z0-9_\.]*$""".r
-    if (bareTypePattern.findFirstIn(normalized).isEmpty) {
-      None
-    } else {
-      val simpleTypeName = normalized.split('.').lastOption.getOrElse(normalized)
-      val applyRegex: Regex = ("(?s)object\\s+" + Regex.quote(simpleTypeName) + "\\b.*?def\\s+apply\\s*\\(\\s*[^:)]*:\\s*String\\s*\\)\\s*:\\s*([^=\\n{]+)").r
-      val makeRegex: Regex = ("(?s)object\\s+" + Regex.quote(simpleTypeName) + "\\b.*?def\\s+make\\s*\\(\\s*[^:)]*:\\s*String\\s*\\)\\s*:\\s*([^=\\n{]+)").r
-
-      val localCandidates = sourceDir.toList.flatMap { dir =>
-        if (Files.isDirectory(dir)) {
-          Files.list(dir).iterator().asScala.toList
-            .filter(path => Files.isRegularFile(path) && path.getFileName.toString.endsWith(".scala"))
-        } else {
-          Nil
-        }
-      }
-      val workspaceCandidates = discoverWorkspaceScalaFiles(simpleTypeName)
-      val candidates = (localCandidates ++ workspaceCandidates).distinct
-
-      val discovered = candidates.view.flatMap { path =>
-        val content = Files.readString(path)
-        val applyFound = applyRegex.findFirstMatchIn(content).flatMap { methodMatch =>
-          val returnType = methodMatch.group(1).trim
-          val isSupportedReturn = returnType.startsWith("Either[") || returnType.startsWith("scala.util.Either[") || returnType == normalized
-          if (isSupportedReturn) Some("apply") else None
-        }
-        val makeFound = makeRegex.findFirstMatchIn(content).flatMap { methodMatch =>
-          val returnType = methodMatch.group(1).trim
-          val isSupportedReturn = returnType.startsWith("Either[") || returnType.startsWith("scala.util.Either[") || returnType == normalized
-          if (isSupportedReturn) Some("make") else None
-        }
-        List(applyFound, makeFound).flatten
-      }.toList
-
-      discovered.find(_ == "apply").orElse(discovered.find(_ == "make"))
-    }
-  }
-
-  private def discoverWorkspaceScalaFiles(simpleTypeName: String): List[Path] = {
-    val cwd = Paths.get("")
-    val ignoredDirNames = Set("target", ".git", ".bloop", ".idea", ".metals", ".scala-build")
-    val expectedFileName = s"$simpleTypeName.scala"
-
-    Try {
-      Files.walk(cwd)
-        .iterator()
-        .asScala
-        .filter { path =>
-          val fileName = path.getFileName.toString
-          val isIgnoredDir = path.iterator().asScala.exists(part => ignoredDirNames.contains(part.toString))
-          Files.isRegularFile(path) && !isIgnoredDir && fileName == expectedFileName
-        }
-        .toList
-    }.getOrElse(Nil)
   }
 }

@@ -23,38 +23,43 @@ object NamedUser {
   private val generatorRuleVersion: String = "0.1.0-SNAPSHOT"
   private val style: builders.configuration.BuilderStyle = builders.configuration.BuilderStyle.Validating
   private val modeTag: String = "validating"
-  private val builderApi: Any = api.ValidatedBuilderGenerator.builder[NamedUser]
+  private val builderApi: Any = make
   private type Builder = api.ValidatedBuilderSelectable[NamedUser, ?, (id: Int, code: String)]
-  def make: Builder = api.ValidatedBuilderGenerator.builder[NamedUser]
-
-  private def derived: api.ValidatedBuilderGenerator[NamedUser] = api.ValidatedBuilderGenerator.derived[NamedUser]
-  private def derivedAllow: api.ValidatedBuilderGenerator[NamedUser] = api.ValidatedBuilderGenerator.derivedAllow[NamedUser]
-  private def derivedNoAllow: api.ValidatedBuilderGenerator[NamedUser] = api.ValidatedBuilderGenerator.derivedNoAllow[NamedUser]
-  private def builderRef: Builder = make
-
+  def make: Builder = builderState0()
   private type IdInput = Int
   private type CodeInput = String
   private type AfterStep1 = api.ValidatedBuilderSelectable[NamedUser, ?, (code: CodeInput)]
   private type AfterStep2 = zio.prelude.ZValidation[Nothing, ?, NamedUser]
-  private def fieldStep1Id(current: Builder, input: IdInput): AfterStep1 = {
-    current.`id`(input)
-  }
-  private val idStepName: String = "id"
-  private def fieldStep2Code(current: AfterStep1, input: CodeInput): AfterStep2 = {
-    current.`code`(input)
-  }
-  private val codeStepName: String = "code"
-  private val fieldSteps: List[String] = List(idStepName, codeStepName)
-  private def buildValidationFromValues(idValue: IdInput, codeValue: CodeInput): zio.prelude.ZValidation[Nothing, ?, NamedUser] = {
-    val afterStep1: AfterStep1 = fieldStep1Id(make, idValue)
-    val afterStep2: AfterStep2 = fieldStep2Code(afterStep1, codeValue)
-    afterStep2
-  }
+  private type IdValidation = zio.prelude.ZValidation[Nothing, ?, Int]
+  private inline given idSmartConstructor: (IdInput => IdValidation) =
+    (idValue: IdInput) => zio.prelude.ZValidation.succeed(idValue).asInstanceOf[IdValidation]
+  private inline def validateId(idValue: IdInput): IdValidation =
+    summon[IdInput => IdValidation].apply(idValue)
+  private type CodeValidation = zio.prelude.ZValidation[Nothing, ?, String]
+  private inline given codeSmartConstructor: (CodeInput => CodeValidation) =
+    (codeValue: CodeInput) => zio.prelude.ZValidation.succeed(codeValue).asInstanceOf[CodeValidation]
+  private inline def validateCode(codeValue: CodeInput): CodeValidation =
+    summon[CodeInput => CodeValidation].apply(codeValue)
+  private inline def builderState0(): Builder =
+    new api.ValidatedBuilderSelectable[NamedUser, Any, (id: Int, code: String)](
+      Tuple1((idValue: IdInput) => builderState1(idValue).asInstanceOf[Any])
+    ).asInstanceOf[Builder]
+  private inline def builderState1(idValue: IdInput): AfterStep1 =
+    new api.ValidatedBuilderSelectable[NamedUser, Any, (code: String)](
+      Tuple1((codeValue: CodeInput) => buildValidationFromValues(idValue, codeValue).asInstanceOf[Any])
+    ).asInstanceOf[AfterStep1]
+  private inline def builderState2(idValue: IdInput, codeValue: CodeInput): AfterStep2 = buildValidationFromValues(idValue, codeValue)
+  private def buildValidationFromValues(idValue: IdInput, codeValue: CodeInput): zio.prelude.ZValidation[Nothing, ?, NamedUser] =
+    zio.prelude.Validation.validateWith(
+      validateId(idValue),
+      validateCode(codeValue)
+    )((idValidated, codeValidated) => NamedUser(idValidated, codeValidated))
   private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.PrimitiveAndWrappedIfDerivable
   private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.FullCollectionAware
   private val effectMode: builders.configuration.EffectMode = builders.configuration.EffectMode.ValidationOnly
   private val conversionMode: builders.configuration.ConversionMode = builders.configuration.ConversionMode.SynthesizeIfMissing
   private val staleCheckMode: builders.configuration.StaleCheckMode = builders.configuration.StaleCheckMode.SignatureHash
   private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.GeneratedRegionOnly
+  private val smartConstructorMode: builders.configuration.SmartConstructorMode = builders.configuration.SmartConstructorMode.ZValidation
   // format: on
 }

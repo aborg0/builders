@@ -39,4 +39,3 @@ object Various {
   // format: on
 }
 
-

@@ -1,10 +1,19 @@
 package builders.scalafix
 
 object GenerateBuilderCompanionRenderer {
+  sealed trait SmartCtorResultKind
+  object SmartCtorResultKind {
+    case object Validation extends SmartCtorResultKind
+    case object EitherResult extends SmartCtorResultKind
+    case object Direct extends SmartCtorResultKind
+  }
+
   final case class ClassField(
     name: String,
     typeExpr: String,
     smartCtorMethodName: Option[String] = None,
+    smartCtorResultKind: Option[SmartCtorResultKind] = None,
+    smartCtorInputTypeExpr: Option[String] = None,
     defaultExpr: Option[String] = None
   )
   private val RuleVersion: String = "0.1.0-SNAPSHOT"
@@ -18,6 +27,17 @@ object GenerateBuilderCompanionRenderer {
     val conversionModeExpr = conversionModeToExpr(options.conversionMode)
     val staleCheckModeExpr = staleCheckModeToExpr(options.staleCheckMode)
     val mergeModeExpr = mergeModeToExpr(options.mergeMode)
+    val smartConstructorModeExpr = smartConstructorModeToExpr(options.smartConstructorMode)
+    val configurationMembers = renderConfigurationMembers(
+      options.style,
+      primitivePolicyExpr,
+      pathModeExpr,
+      effectModeExpr,
+      conversionModeExpr,
+      staleCheckModeExpr,
+      mergeModeExpr,
+      smartConstructorModeExpr
+    )
     val builderApiExpr = builderApiExpression(className, options)
     val builderMembers = styleSpecificBuilderMembers(className, fields, options)
 
@@ -29,15 +49,38 @@ object GenerateBuilderCompanionRenderer {
   private val modeTag: String = \"$modeTag\"
   private val builderApi: Any = $builderApiExpr
   $builderMembers
-  private val primitivePolicy: builders.configuration.PrimitivePolicy = $primitivePolicyExpr
-  private val pathMode: builders.configuration.PathMode = $pathModeExpr
-  private val effectMode: builders.configuration.EffectMode = $effectModeExpr
-  private val conversionMode: builders.configuration.ConversionMode = $conversionModeExpr
-  private val staleCheckMode: builders.configuration.StaleCheckMode = $staleCheckModeExpr
-  private val mergeMode: builders.configuration.MergeMode = $mergeModeExpr
+$configurationMembers
   // format: on
 }
 """
+  }
+
+  private def renderConfigurationMembers(
+    style: BuilderStyle,
+    primitivePolicyExpr: String,
+    pathModeExpr: String,
+    effectModeExpr: String,
+    conversionModeExpr: String,
+    staleCheckModeExpr: String,
+    mergeModeExpr: String,
+    smartConstructorModeExpr: String
+  ): String = {
+    val base = List(
+      s"  private val primitivePolicy: builders.configuration.PrimitivePolicy = $primitivePolicyExpr",
+      s"  private val pathMode: builders.configuration.PathMode = $pathModeExpr",
+      s"  private val effectMode: builders.configuration.EffectMode = $effectModeExpr",
+      s"  private val conversionMode: builders.configuration.ConversionMode = $conversionModeExpr",
+      s"  private val staleCheckMode: builders.configuration.StaleCheckMode = $staleCheckModeExpr",
+      s"  private val mergeMode: builders.configuration.MergeMode = $mergeModeExpr"
+    )
+    val smart = style match {
+      case BuilderStyle.Simple =>
+        Nil
+      case BuilderStyle.Validating | BuilderStyle.Effect =>
+        List(s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr")
+    }
+
+    (base ++ smart).mkString("\n")
   }
 
   private def styleToExpr(style: BuilderStyle): String = style match {
@@ -62,10 +105,9 @@ object GenerateBuilderCompanionRenderer {
     case BuilderStyle.Simple =>
       options.builderMethodName
     case BuilderStyle.Validating =>
-      s"api.ValidatedBuilderGenerator.builder[$className]"
+      options.builderMethodName
     case BuilderStyle.Effect =>
-      // Effect mode currently reuses validating API until backend-specific effects are implemented.
-      s"api.ValidatedBuilderGenerator.builder[$className]"
+      options.builderMethodName
   }
 
   private def styleSpecificBuilderMembers(className: String, fields: List[ClassField], options: DecodedGenerateBuilder): String = options.style match {
@@ -73,65 +115,9 @@ object GenerateBuilderCompanionRenderer {
       val fieldMembers = renderSimpleFieldMembers(className, fields, options)
       s"""$fieldMembers"""
     case BuilderStyle.Validating =>
-      val terminalType = s"zio.prelude.ZValidation[Nothing, ?, $className]"
-      val publicBuilderMethodName = options.builderMethodName
-      val allowMethod = publicBuilderMethodName + "Allow"
-      val noAllowMethod = publicBuilderMethodName + "NoAllow"
-      val fieldMembers = renderGenericFieldMembers(className, fields, publicBuilderMethodName, terminalType = terminalType, buildMethodName = "buildValidationFromValues")
-      val extraPublicBuilders =
-        if (options.generateExtraVariants) {
-          s"""  def $allowMethod: Builder = api.ValidatedBuilderGenerator.builderAllow[$className]
-  def $noAllowMethod: Builder = api.ValidatedBuilderGenerator.builderNoAllow[$className]"""
-        } else {
-          ""
-        }
-      val privateRefs =
-        if (options.generateExtraVariants) {
-          s"""  private def ${allowMethod}Ref: Any = $allowMethod
-  private def ${noAllowMethod}Ref: Any = $noAllowMethod"""
-        } else {
-          ""
-        }
-      s"""private type Builder = api.ValidatedBuilderSelectable[$className, ?, (${renderBuilderInputTuple(fields)})]
-  def $publicBuilderMethodName: Builder = api.ValidatedBuilderGenerator.builder[$className]
-$extraPublicBuilders
-  private def derived: api.ValidatedBuilderGenerator[$className] = api.ValidatedBuilderGenerator.derived[$className]
-  private def derivedAllow: api.ValidatedBuilderGenerator[$className] = api.ValidatedBuilderGenerator.derivedAllow[$className]
-  private def derivedNoAllow: api.ValidatedBuilderGenerator[$className] = api.ValidatedBuilderGenerator.derivedNoAllow[$className]
-  private def builderRef: Builder = $publicBuilderMethodName
-$privateRefs
-$fieldMembers"""
+      renderValidatingBuilderMembers(className, fields, options)
     case BuilderStyle.Effect =>
-      val terminalType = s"zio.prelude.ZValidation[Nothing, ?, $className]"
-      val publicBuilderMethodName = options.builderMethodName
-      val effectMethodName = publicBuilderMethodName + "Effect"
-      val fieldMembers = renderGenericFieldMembers(
-        className,
-        fields,
-        if (options.generateExtraVariants) effectMethodName else publicBuilderMethodName,
-        terminalType = terminalType,
-        buildMethodName = "buildEffectFromValues"
-      )
-      val effectMethodDef =
-        if (options.generateExtraVariants) {
-          s"def $effectMethodName: Builder = $publicBuilderMethodName"
-        } else {
-          ""
-        }
-      val effectRefDef =
-        if (options.generateExtraVariants) {
-          s"private def ${effectMethodName}Ref: Any = $effectMethodName"
-        } else {
-          ""
-        }
-      s"""private type Builder = api.ValidatedBuilderSelectable[$className, ?, (${renderBuilderInputTuple(fields)})]
-  def $publicBuilderMethodName: Builder = api.ValidatedBuilderGenerator.builder[$className]
-  $effectMethodDef
-  private def derived: api.ValidatedBuilderGenerator[$className] = api.ValidatedBuilderGenerator.derived[$className]
-  private def builderRef: Builder = $publicBuilderMethodName
-  // Effect backend is currently modeled through the validated builder seam.
-  $effectRefDef
-$fieldMembers"""
+      renderEffectBuilderMembers(className, fields, options)
   }
 
   private def primitivePolicyToExpr(value: PrimitivePolicy): String = value match {
@@ -180,6 +166,15 @@ $fieldMembers"""
       "builders.configuration.MergeMode.GeneratedRegionOnly"
     case MergeMode.ReplaceGeneratedMembers =>
       "builders.configuration.MergeMode.ReplaceGeneratedMembers"
+  }
+
+  private def smartConstructorModeToExpr(value: SmartConstructorMode): String = value match {
+    case SmartConstructorMode.ZValidation =>
+      "builders.configuration.SmartConstructorMode.ZValidation"
+    case SmartConstructorMode.Either =>
+      "builders.configuration.SmartConstructorMode.Either"
+    case SmartConstructorMode.Direct =>
+      "builders.configuration.SmartConstructorMode.Direct"
   }
 
   private def renderSimpleFieldMembers(className: String, fields: List[ClassField], options: DecodedGenerateBuilder): String = {
@@ -605,7 +600,7 @@ $fieldMembers"""
             case (field, inputName) =>
               s"${sanitizeFieldName(field.name)}: $inputName"
           }.mkString(", ")
-          s"api.ValidatedBuilderSelectable[$className, ?, ($remaining)]"
+          s"ValidatedBuilderSelectable[$className, ?, ($remaining)]"
         }
         s"  private type $afterTypeName = $rhs"
     }.reverse.toList
@@ -615,6 +610,13 @@ $fieldMembers"""
     fields.map { field =>
       val sanitized = sanitizeFieldName(field.name)
       s"$sanitized: ${field.typeExpr}"
+    }.mkString(", ")
+  }
+
+  private def renderValidatedBuilderInputTuple(fields: List[ClassField]): String = {
+    fields.map { field =>
+      val sanitized = sanitizeFieldName(field.name)
+      s"$sanitized: ${renderValidatedInputTypeExpr(field)}"
     }.mkString(", ")
   }
 
@@ -639,4 +641,227 @@ $fieldMembers"""
   private def escapeForString(value: String): String = {
     value.replace("\\", "\\\\").replace("\"", "\\\"")
   }
+
+  private def renderValidatingBuilderMembers(className: String, fields: List[ClassField], options: DecodedGenerateBuilder): String = {
+    val extraVariantNames =
+      if (options.generateExtraVariants) {
+        List(options.builderMethodName + "Allow", options.builderMethodName + "NoAllow")
+      } else {
+        Nil
+      }
+    renderLocalValidatedBuilderMembers(
+      className,
+      fields,
+      options,
+      buildMethodName = "buildValidationFromValues",
+      extraVariantNames = extraVariantNames
+    )
+  }
+
+  private def renderEffectBuilderMembers(className: String, fields: List[ClassField], options: DecodedGenerateBuilder): String = {
+    val extraVariantNames =
+      if (options.generateExtraVariants) {
+        List(options.builderMethodName + "Effect")
+      } else {
+        Nil
+      }
+    renderLocalValidatedBuilderMembers(
+      className,
+      fields,
+      options,
+      buildMethodName = "buildEffectFromValues",
+      extraVariantNames = extraVariantNames
+    )
+  }
+
+  private def renderLocalValidatedBuilderMembers(
+    className: String,
+    fields: List[ClassField],
+    options: DecodedGenerateBuilder,
+    buildMethodName: String,
+    extraVariantNames: List[String]
+  ): String = {
+    val terminalType = s"zio.prelude.ZValidation[Nothing, ?, $className]"
+    val publicBuilderMethodName = options.builderMethodName
+    val selectableSupport = renderLocalValidatedSelectableSupport()
+    val builderTypeDef =
+      if (fields.isEmpty) {
+        s"  private type Builder = $terminalType"
+      } else {
+        s"  private type Builder = ValidatedBuilderSelectable[$className, ?, (${renderValidatedBuilderInputTuple(fields)})]"
+      }
+    val publicBuilderDefs =
+      (List(s"  def $publicBuilderMethodName: Builder = builderState0()") ++
+        extraVariantNames.map(variantName => s"  def $variantName: Builder = builderState0()"))
+        .mkString("\n")
+    val fieldMembers = renderLocalValidatedFieldMembers(className, fields, terminalType, buildMethodName)
+    s"""$selectableSupport
+$builderTypeDef
+$publicBuilderDefs
+$fieldMembers"""
+  }
+
+  private def renderLocalValidatedSelectableSupport(): String = {
+    """private class ValidatedBuilderSelectable[T, E, R <: scala.NamedTuple.AnyNamedTuple](
+  private val underlying: Tuple1[Any => Any]
+) extends Selectable {
+  type Fields = BuilderFields[R, T, E]
+  def selectDynamic(name: String): Any = underlying._1
+}
+private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.NamedTuple.AnyNamedTuple =
+  scala.NamedTuple.DropNames[R] match {
+    case Tuple1[h] =>
+      scala.NamedTuple[scala.NamedTuple.Names[R], Tuple1[h => zio.prelude.ZValidation[Nothing, E, T]]]
+    case h *: t =>
+      scala.NamedTuple[
+        Tuple1[Tuple.Head[scala.NamedTuple.Names[R]]],
+        Tuple1[h => ValidatedBuilderSelectable[T, E, scala.NamedTuple[Tuple.Tail[scala.NamedTuple.Names[R]], t]]]
+      ]
+  }"""
+  }
+
+  private def renderLocalValidatedFieldMembers(
+    className: String,
+    fields: List[ClassField],
+    terminalType: String,
+    buildMethodName: String
+  ): String = {
+    val inputAliases = fields.map { field =>
+      val sanitized = sanitizeFieldName(field.name)
+      s"  private type ${capitalize(sanitized)}Input = ${renderValidatedInputTypeExpr(field)}"
+    }
+    val afterStepTypeAliases = renderGenericAfterStepTypeAliases(className, fields, terminalType)
+    val validationHelpers = renderValidationHelpers(fields)
+    val stateMethods = renderSelectableStateMethods(className, fields, buildMethodName)
+    val buildHelper = renderLocalValidationBuildHelper(className, fields, terminalType, buildMethodName)
+
+    (inputAliases ++ afterStepTypeAliases ++ validationHelpers ++ stateMethods :+ buildHelper).mkString("\n")
+  }
+
+  private def renderValidatedInputTypeExpr(field: ClassField): String = {
+    field.smartCtorInputTypeExpr.getOrElse(field.typeExpr)
+  }
+
+  private def renderValidationHelpers(fields: List[ClassField]): List[String] = {
+    fields.map { field =>
+      val sanitized = sanitizeFieldName(field.name)
+      val capitalized = capitalize(sanitized)
+      val helperExpr = renderValidationHelperExpr(field, sanitized, capitalized)
+      s"""  private type ${capitalized}Validation = zio.prelude.ZValidation[Nothing, ?, ${field.typeExpr}]
+  private inline given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
+    (${sanitized}Value: ${capitalized}Input) => $helperExpr
+  private inline def validate$capitalized(${sanitized}Value: ${capitalized}Input): ${capitalized}Validation =
+    summon[${capitalized}Input => ${capitalized}Validation].apply(${sanitized}Value)"""
+    }
+  }
+
+  private def renderValidationHelperExpr(field: ClassField, sanitized: String, capitalized: String): String = {
+    val inputValue = s"${sanitized}Value"
+    (field.smartCtorMethodName, field.smartCtorResultKind) match {
+      case (Some(methodName), Some(resultKind)) =>
+        val invocation = renderSmartConstructorInvocation(field.typeExpr, methodName, inputValue)
+        resultKind match {
+          case SmartCtorResultKind.Validation =>
+            s"$invocation.asInstanceOf[${capitalized}Validation]"
+          case SmartCtorResultKind.EitherResult =>
+            s"zio.prelude.ZValidation.fromEither($invocation).asInstanceOf[${capitalized}Validation]"
+          case SmartCtorResultKind.Direct =>
+            s"zio.prelude.ZValidation.succeed($invocation).asInstanceOf[${capitalized}Validation]"
+        }
+      case _ =>
+        s"zio.prelude.ZValidation.succeed($inputValue).asInstanceOf[${capitalized}Validation]"
+    }
+  }
+
+  private def renderSmartConstructorInvocation(typeExpr: String, methodName: String, inputValue: String): String = {
+    val companionExpr = smartConstructorCompanionExpr(typeExpr)
+    methodName match {
+      case "apply" =>
+        s"$companionExpr($inputValue)"
+      case other =>
+        s"$companionExpr.$other($inputValue)"
+    }
+  }
+
+  private def smartConstructorCompanionExpr(typeExpr: String): String = {
+    val trimmed = typeExpr.trim
+    if (trimmed.endsWith(".Type")) {
+      trimmed.stripSuffix(".Type")
+    } else {
+      trimmed
+    }
+  }
+
+  private def renderSelectableStateMethods(className: String, fields: List[ClassField], buildMethodName: String): List[String] = {
+    if (fields.isEmpty) {
+      List(s"  private inline def builderState0(): Builder = $buildMethodName()")
+    } else {
+      val builderStates = (0 until fields.size).map { index =>
+        val methodName = s"builderState$index"
+        val params = fields.take(index).map { field =>
+          val sanitized = sanitizeFieldName(field.name)
+          s"${sanitized}Value: ${capitalize(sanitized)}Input"
+        }.mkString(", ")
+        val returnType = if (index == 0) "Builder" else s"AfterStep$index"
+        val currentField = fields(index)
+        val currentName = sanitizeFieldName(currentField.name)
+        val currentInputType = s"${capitalize(currentName)}Input"
+        val nextArgs = (fields.take(index).map(field => sanitizeFieldName(field.name) + "Value") :+ s"${currentName}Value").mkString(", ")
+        val nextExpr =
+          if (index == fields.size - 1) {
+            s"$buildMethodName($nextArgs)"
+          } else {
+            s"builderState${index + 1}($nextArgs)"
+          }
+        val remainingTuple = renderValidatedBuilderInputTuple(fields.drop(index))
+        val paramSection = if (params.isEmpty) "" else params
+        s"""  private inline def $methodName($paramSection): $returnType =
+    new ValidatedBuilderSelectable[$className, Any, ($remainingTuple)](
+      Tuple1((${currentName}Value: $currentInputType) => $nextExpr.asInstanceOf[Any])
+    ).asInstanceOf[$returnType]"""
+      }
+      val terminalState = {
+        val params = fields.map { field =>
+          val sanitized = sanitizeFieldName(field.name)
+          s"${sanitized}Value: ${capitalize(sanitized)}Input"
+        }.mkString(", ")
+        s"  private inline def builderState${fields.size}($params): AfterStep${fields.size} = $buildMethodName(${fields.map(field => sanitizeFieldName(field.name) + "Value").mkString(", ")})"
+      }
+      (builderStates :+ terminalState).toList
+    }
+  }
+
+  private def renderLocalValidationBuildHelper(
+    className: String,
+    fields: List[ClassField],
+    terminalType: String,
+    buildMethodName: String
+  ): String = {
+    if (fields.isEmpty) {
+      s"""  private def $buildMethodName(): $terminalType =
+    zio.prelude.ZValidation.succeed($className())"""
+    } else if (fields.size == 1) {
+      val field = fields.head
+      val sanitized = sanitizeFieldName(field.name)
+      val capitalized = capitalize(sanitized)
+      s"""  private def $buildMethodName(${sanitized}Value: ${capitalized}Input): $terminalType =
+    validate$capitalized(${sanitized}Value).map(${sanitized}Validated => $className(${sanitized}Validated))"""
+    } else {
+      val parameterDecl = fields.map { field =>
+        val sanitized = sanitizeFieldName(field.name)
+        s"${sanitized}Value: ${capitalize(sanitized)}Input"
+      }.mkString(", ")
+      val validationCalls = fields.map { field =>
+        val sanitized = sanitizeFieldName(field.name)
+        val capitalized = capitalize(sanitized)
+        s"      validate$capitalized(${sanitized}Value)"
+      }.mkString(",\n")
+      val validatedParams = fields.map(field => sanitizeFieldName(field.name) + "Validated").mkString(", ")
+      s"""  private def $buildMethodName($parameterDecl): $terminalType =
+    zio.prelude.Validation.validateWith(
+$validationCalls
+    )(($validatedParams) => $className($validatedParams))"""
+    }
+  }
+
 }

@@ -37,9 +37,9 @@ object GenerateBuilderVariantToggleMatrixTests extends TestSuite {
           className = "ValidatingToggleUser",
           extraVariants = true,
           expectedPresent = List(
-            "def make: Builder = api.ValidatedBuilderGenerator.builder[ValidatingToggleUser]",
-            "def makeAllow: Builder = api.ValidatedBuilderGenerator.builderAllow[ValidatingToggleUser]",
-            "def makeNoAllow: Builder = api.ValidatedBuilderGenerator.builderNoAllow[ValidatingToggleUser]"
+            "def make: Builder = builderState0()",
+            "def makeAllow: Builder = builderState0()",
+            "def makeNoAllow: Builder = builderState0()"
           ),
           expectedAbsent = Nil
         ),
@@ -49,13 +49,13 @@ object GenerateBuilderVariantToggleMatrixTests extends TestSuite {
           className = "ValidatingNoExtraUser",
           extraVariants = false,
           expectedPresent = List(
-            "def make: Builder = api.ValidatedBuilderGenerator.builder[ValidatingNoExtraUser]"
+            "def make: Builder = builderState0()"
           ),
           expectedAbsent = List(
             "def makeAllow:",
             "def makeNoAllow:",
-            "private def makeAllowRef:",
-            "private def makeNoAllowRef:"
+            "derivedAllow",
+            "derivedNoAllow"
           )
         ),
         VariantCase(
@@ -64,8 +64,8 @@ object GenerateBuilderVariantToggleMatrixTests extends TestSuite {
           className = "EffectToggleUser",
           extraVariants = true,
           expectedPresent = List(
-            "def make: Builder = api.ValidatedBuilderGenerator.builder[EffectToggleUser]",
-            "def makeEffect: Builder = make"
+            "def make: Builder = builderState0()",
+            "def makeEffect: Builder = builderState0()"
           ),
           expectedAbsent = Nil
         ),
@@ -75,11 +75,11 @@ object GenerateBuilderVariantToggleMatrixTests extends TestSuite {
           className = "EffectNoExtraUser",
           extraVariants = false,
           expectedPresent = List(
-            "def make: Builder = api.ValidatedBuilderGenerator.builder[EffectNoExtraUser]"
+            "def make: Builder = builderState0()"
           ),
           expectedAbsent = List(
             "def makeEffect:",
-            "private def makeEffectRef:"
+            "builderEffectRef"
           )
         )
       )

@@ -5,7 +5,7 @@ ThisBuild / version := "0.1.0-SNAPSHOT"
 ThisBuild / scalaVersion := "3.7.4"
 ThisBuild / crossScalaVersions := Seq("3.7.4", "3.8.3")
 
-// A new simple_builders subproject holds the sources previously at the root `src` directory.
+// A new simple_builders subproject holds the sources previously at sthe root `src` directory.
 lazy val simpleBuilders = (project in file("simple_builders"))
   .settings(
     name := "simpleBuilders",
@@ -13,14 +13,14 @@ lazy val simpleBuilders = (project in file("simple_builders"))
       "-Xprint-inline",
       "-Xmax-inlines", "1000"
     ),
-    libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.5" % "test",
+    libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.5" % Test,
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
 
 lazy val configuration = (project in file("configuration"))
   .settings(
     name := "builders-configuration",
-    libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.5" % "test",
+    libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.5" % Test,
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
 
@@ -45,10 +45,10 @@ lazy val withPrelude = project
   .in(file("with_zio_prelude"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-prelude" % "1.0.0-RC46",
+      "dev.zio" %% "zio-prelude" % "1.0.0-RC47",
       "com.kubuszok" %% "hearth" % "0.2.0",
       //compilerPlugin(("com.kubuszok" % "hearth" % "0.1.0").cross(CrossVersion.Patch)),
-      "com.lihaoyi" %% "utest" % "0.9.5" % "test", // Scala-JVM
+      "com.lihaoyi" %% "utest" % "0.9.5" % Test, // Scala-JVM
     ),
     scalacOptions ++= Seq(
       "-feature",
@@ -67,9 +67,11 @@ lazy val removeFix = project
     scalaVersion := "2.13.17",
     libraryDependencies ++= Seq(
       "ch.epfl.scala" %% "scalafix-core" % "0.14.4",
-      "ch.epfl.scala" % "scalafix-testkit_2.13.17" % "0.14.4" % "test",
-      compilerPlugin("org.scalameta" % "semanticdb-scalac_2.13.17" % "4.17.0" % "test"),
-      "com.lihaoyi" %% "utest" % "0.9.5" % "test"
+      "ch.epfl.scala" % "scalafix-testkit_2.13.17" % "0.14.4" % Test,
+      compilerPlugin("org.scalameta" % "semanticdb-scalac_2.13.17" % "4.17.0" % Test),
+      "com.lihaoyi" %% "utest" % "0.9.5" % Test,
+      "dev.zio" %% "zio" % "2.1.26" % Test,
+      "dev.zio" %% "zio-prelude" % "1.0.0-RC46" % Test
     ),
     Test / unmanagedSourceDirectories += (baseDirectory.value / "src" / "test" / "resources" / "testkit" / "GenerateBuildersRuleSemanticSuite" / "input"),
     Test / scalacOptions ++= Seq(
@@ -111,7 +113,7 @@ lazy val example = project
     semanticdbEnabled := true,
     Compile / scalacOptions += "-Xsemanticdb",
     // Compile / scalacOptions += s"-sourceroot:${baseDirectory.value.getCanonicalPath}",
-    scalafixDependencies += "builders-scalafix-rules" % "builders-scalafix-rules_2.13" % "0.1.0-SNAPSHOT",
+    scalafixDependencies += ("builders-scalafix-rules" %% "builders-scalafix-rules" % "0.1.0-SNAPSHOT")/* .cross(CrossVersion.for3Use2_13) */,
     testFrameworks += new TestFramework("utest.runner.Framework")
   )
   .dependsOn(configuration)

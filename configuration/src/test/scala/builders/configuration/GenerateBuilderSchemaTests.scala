@@ -55,7 +55,8 @@ object GenerateBuilderSchemaTests extends TestSuite {
         mergeMode = MergeMode.GeneratedRegionOnly,
         builderMethodName = "builder",
         generateExtraVariants = true,
-        simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues
+        simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
+        smartConstructorMode = SmartConstructorMode.ZValidation
       )
       assert(GenerateBuilderOptions.default == expected)
     }

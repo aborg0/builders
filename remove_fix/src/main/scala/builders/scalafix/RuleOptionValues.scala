@@ -72,3 +72,12 @@ object SimpleOptionalValues {
     OptionalValuesWithEmptyDefaults
   )
 }
+
+sealed abstract class SmartConstructorMode(val value: String)
+object SmartConstructorMode {
+  case object ZValidation extends SmartConstructorMode("ZValidation")
+  case object Either extends SmartConstructorMode("Either")
+  case object Direct extends SmartConstructorMode("Direct")
+
+  val all: List[SmartConstructorMode] = List(ZValidation, Either, Direct)
+}

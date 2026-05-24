@@ -47,6 +47,12 @@ enum SimpleOptionalValues {
   case OptionalValuesWithEmptyDefaults
 }
 
+enum SmartConstructorMode {
+  case ZValidation
+  case Either
+  case Direct
+}
+
 final class GenerateBuilder(
   val style: BuilderStyle = BuilderStyle.Validating,
   val primitivePolicy: PrimitivePolicy = PrimitivePolicy.PrimitiveAndWrappedIfDerivable,
@@ -57,7 +63,8 @@ final class GenerateBuilder(
   val mergeMode: MergeMode = MergeMode.GeneratedRegionOnly,
   val builderMethodName: String = "builder",
   val generateExtraVariants: Boolean = true,
-  val simpleOptionalValues: SimpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues
+  val simpleOptionalValues: SimpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
+  val smartConstructorMode: SmartConstructorMode = SmartConstructorMode.ZValidation
 ) extends StaticAnnotation
 
 final case class GenerateBuilderOptions(
@@ -70,7 +77,8 @@ final case class GenerateBuilderOptions(
   mergeMode: MergeMode,
   builderMethodName: String,
   generateExtraVariants: Boolean,
-  simpleOptionalValues: SimpleOptionalValues
+  simpleOptionalValues: SimpleOptionalValues,
+  smartConstructorMode: SmartConstructorMode
 )
 
 object GenerateBuilderOptions {
@@ -84,6 +92,7 @@ object GenerateBuilderOptions {
     mergeMode = MergeMode.GeneratedRegionOnly,
     builderMethodName = "builder",
     generateExtraVariants = true,
-    simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues
+    simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
+    smartConstructorMode = SmartConstructorMode.ZValidation
   )
 }

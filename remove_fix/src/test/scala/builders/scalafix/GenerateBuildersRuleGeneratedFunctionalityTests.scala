@@ -8,6 +8,8 @@ import java.nio.file.Paths
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.jar.JarEntry
+import java.util.jar.JarOutputStream
 
 import scala.jdk.CollectionConverters._
 
@@ -15,6 +17,7 @@ import utest._
 
 object GenerateBuildersRuleGeneratedFunctionalityTests extends TestSuite {
   private val repoRoot: Path = Paths.get("").toAbsolutePath.normalize()
+  private val removeFixTargetDir: Path = repoRoot.resolve("remove_fix").resolve("target").resolve("scala-2.13")
   private val fixtureTemplate: Path =
     repoRoot
       .resolve("remove_fix")
@@ -44,11 +47,13 @@ object GenerateBuildersRuleGeneratedFunctionalityTests extends TestSuite {
           )
 
         assert(rewritten.contains("object ValidatedUser"))
-        assert(rewritten.contains("def builder: Builder = api.ValidatedBuilderGenerator.builder[ValidatedUser]"))
+        assert(rewritten.contains("private val builderApi: Any = builder"))
+        assert(rewritten.contains("def builder: Builder = builderState0()"))
         assert(rewritten.contains("private type Builder = api.ValidatedBuilderSelectable[ValidatedUser, ?, (id: Int, code: String)]"))
         assert(rewritten.contains("private type AfterStep1 = api.ValidatedBuilderSelectable[ValidatedUser, ?, (code: CodeInput)]"))
-        assert(rewritten.contains("current.`id`(input)"))
-        assert(rewritten.contains("current.`code`(input)"))
+        assert(rewritten.contains("Tuple1((idValue: IdInput) => builderState1(idValue).asInstanceOf[Any])"))
+        assert(rewritten.contains("validateId(idValue)"))
+        assert(rewritten.contains("validateCode(codeValue)"))
       } finally {
         deleteRecursively(tempDir)
       }
@@ -58,23 +63,89 @@ object GenerateBuildersRuleGeneratedFunctionalityTests extends TestSuite {
   private final case class CommandResult(exitCode: Int, output: String)
 
   private def runSbtFixture(workingDirectory: Path): CommandResult = {
+    prepareLocalScalafixRuleArtifact()
+
+    runSbtCommand(
+      directory = workingDirectory,
+      commands = List("clean", "applyGenerateBuilders", "test"),
+      extraEnv = Map("BUILDERS_REPO_ROOT" -> repoRoot.toString)
+    )
+  }
+
+  private def runSbtCommand(directory: Path, commands: List[String], extraEnv: Map[String, String] = Map.empty): CommandResult = {
+    val baseCommand = List("sbt", "--no-colors", "--batch") ++ commands
     val command =
       if (System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win")) {
-        List("cmd", "/c", "sbt", "--no-colors", "--batch", "clean", "applyGenerateBuilders", "test")
+        List("cmd", "/c") ++ baseCommand
       } else {
-        List("sbt", "--no-colors", "--batch", "clean", "applyGenerateBuilders", "test")
+        baseCommand
       }
 
     val processBuilder = new ProcessBuilder(command: _*)
-    processBuilder.directory(workingDirectory.toFile)
+    processBuilder.directory(directory.toFile)
     processBuilder.redirectErrorStream(true)
-    processBuilder.environment().put("BUILDERS_REPO_ROOT", repoRoot.toString)
+    extraEnv.foreach { case (key, value) =>
+      processBuilder.environment().put(key, value)
+    }
 
     val process = processBuilder.start()
     val output = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
     val exitCode = process.waitFor()
 
     CommandResult(exitCode, output)
+  }
+
+  private def prepareLocalScalafixRuleArtifact(): Unit = {
+    val localBase =
+      Paths.get(System.getProperty("user.home"))
+        .resolve(".ivy2")
+        .resolve("local")
+        .resolve("builders-scalafix-rules")
+        .resolve("builders-scalafix-rules_2.13")
+        .resolve("0.1.0-SNAPSHOT")
+    val binaryJar = localBase.resolve("jars").resolve("builders-scalafix-rules_2.13.jar")
+    val sourcesJar = localBase.resolve("srcs").resolve("builders-scalafix-rules_2.13-sources.jar")
+    val javadocJar = localBase.resolve("docs").resolve("builders-scalafix-rules_2.13-javadoc.jar")
+    val pomFile = localBase.resolve("poms").resolve("builders-scalafix-rules_2.13.pom")
+    val ivyFile = localBase.resolve("ivys").resolve("ivy.xml")
+
+    deleteRecursively(localBase)
+    Files.createDirectories(binaryJar.getParent)
+    Files.createDirectories(sourcesJar.getParent)
+    Files.createDirectories(javadocJar.getParent)
+    Files.createDirectories(pomFile.getParent)
+    Files.createDirectories(ivyFile.getParent)
+
+    writeJarFromClasses(removeFixTargetDir.resolve("classes"), binaryJar)
+    copyIfExists(removeFixTargetDir.resolve("builders-scalafix-rules_2.13-0.1.0-SNAPSHOT-sources.jar"), sourcesJar)
+    copyIfExists(removeFixTargetDir.resolve("builders-scalafix-rules_2.13-0.1.0-SNAPSHOT-javadoc.jar"), javadocJar)
+    Files.copy(removeFixTargetDir.resolve("builders-scalafix-rules_2.13-0.1.0-SNAPSHOT.pom"), pomFile, StandardCopyOption.REPLACE_EXISTING)
+    Files.copy(removeFixTargetDir.resolve("ivy-0.1.0-SNAPSHOT.xml"), ivyFile, StandardCopyOption.REPLACE_EXISTING)
+  }
+
+  private def copyIfExists(source: Path, target: Path): Unit = {
+    if (Files.exists(source)) {
+      Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+    }
+  }
+
+  private def writeJarFromClasses(classesDir: Path, jarPath: Path): Unit = {
+    val output = new JarOutputStream(Files.newOutputStream(jarPath))
+    try {
+      Files.walk(classesDir).iterator().asScala
+        .filter(Files.isRegularFile(_))
+        .toList
+        .sortBy(path => classesDir.relativize(path).toString)
+        .foreach { path =>
+          val entryName = classesDir.relativize(path).toString.replace('\\', '/')
+          val entry = new JarEntry(entryName)
+          output.putNextEntry(entry)
+          Files.copy(path, output)
+          output.closeEntry()
+        }
+    } finally {
+      output.close()
+    }
   }
 
   private def copyDirectory(source: Path, target: Path): Unit = {

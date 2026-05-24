@@ -9,7 +9,6 @@ val buildersRepoRoot = file(sys.env.getOrElse("BUILDERS_REPO_ROOT", sys.error("B
 lazy val simpleBuildersRef = ProjectRef(buildersRepoRoot, "simpleBuilders")
 lazy val configurationRef = ProjectRef(buildersRepoRoot, "configuration")
 lazy val withPreludeRef = ProjectRef(buildersRepoRoot, "withPrelude")
-lazy val removeFixRef = ProjectRef(buildersRepoRoot, "removeFix")
 
 lazy val root = (project in file("."))
   .dependsOn(simpleBuildersRef, configurationRef, withPreludeRef)
@@ -23,7 +22,6 @@ lazy val root = (project in file("."))
     libraryDependencies += "com.lihaoyi" %% "utest" % "0.9.5" % Test,
     testFrameworks += new TestFramework("utest.runner.Framework"),
     applyGenerateBuilders := {
-      (removeFixRef / publishLocal).value
       (Compile / scalafix).toTask(" class:builders.scalafix.GenerateBuildersRule").value
     }
   )

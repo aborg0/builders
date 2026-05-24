@@ -84,7 +84,8 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
             mergeMode = MergeMode.ReplaceGeneratedMembers,
             builderMethodName = "make",
             generateExtraVariants = false,
-            simpleOptionalValues = SimpleOptionalValues.OptionalValuesWithEmptyDefaults
+            simpleOptionalValues = SimpleOptionalValues.OptionalValuesWithEmptyDefaults,
+            smartConstructorMode = SmartConstructorMode.ZValidation
           )
         )
       )

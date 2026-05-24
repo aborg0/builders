@@ -17,7 +17,7 @@ object GenerateBuilderTextRewriter {
         val fieldsRaw = m.fieldsRaw
         val args = parseArguments(argsRaw)
         val decoded = GenerateBuilderAnnotationDecoder.decode(args).toOption.getOrElse(DecodedGenerateBuilder.default)
-        val fields = parseFields(fieldsRaw)
+        val fields = parseFields(fieldsRaw, source, decoded)
         val generated = GenerateBuilderCompanionRenderer.render(className, fields, decoded)
         findCompanionRange(source, className) match {
           case Some((start, end)) if isGeneratedCompanion(source.substring(start, end)) =>
@@ -110,7 +110,7 @@ object GenerateBuilderTextRewriter {
       .toMap
   }
 
-  private def parseFields(raw: String): List[GenerateBuilderCompanionRenderer.ClassField] = {
+  private def parseFields(raw: String, source: String, options: DecodedGenerateBuilder): List[GenerateBuilderCompanionRenderer.ClassField] = {
     splitTopLevel(raw, ',')
       .toList
       .map(_.trim)
@@ -129,12 +129,27 @@ object GenerateBuilderTextRewriter {
                   val typeExpr = typeAndDefault.substring(0, eqIndex).trim
                   val defaultExpr = typeAndDefault.substring(eqIndex + 1).trim
                   if (typeExpr.nonEmpty && defaultExpr.nonEmpty) {
-                    Some(GenerateBuilderCompanionRenderer.ClassField(fieldName, typeExpr, defaultExpr = Some(defaultExpr)))
+                    val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromSource(typeExpr, source, options.smartConstructorMode)
+                    Some(GenerateBuilderCompanionRenderer.ClassField(
+                      fieldName,
+                      typeExpr,
+                      smartCtorMethodName = discoveredSmartCtor.map(_.methodName),
+                      smartCtorResultKind = discoveredSmartCtor.map(_.resultKind),
+                      smartCtorInputTypeExpr = discoveredSmartCtor.flatMap(_.inputTypeExpr),
+                      defaultExpr = Some(defaultExpr)
+                    ))
                   } else {
                     None
                   }
                 case None =>
-                  Some(GenerateBuilderCompanionRenderer.ClassField(fieldName, typeAndDefault))
+                  val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromSource(typeAndDefault, source, options.smartConstructorMode)
+                  Some(GenerateBuilderCompanionRenderer.ClassField(
+                    fieldName,
+                    typeAndDefault,
+                    smartCtorMethodName = discoveredSmartCtor.map(_.methodName),
+                    smartCtorResultKind = discoveredSmartCtor.map(_.resultKind),
+                    smartCtorInputTypeExpr = discoveredSmartCtor.flatMap(_.inputTypeExpr)
+                  ))
               }
             }
           case None =>

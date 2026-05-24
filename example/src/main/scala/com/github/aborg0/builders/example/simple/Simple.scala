@@ -34,7 +34,6 @@ object Simple {
 }
 
 
-
 object Example {
   def main(args: Array[String]): Unit = {
     val instance = Simple.builder.field1("hello").field2(42).field3(true)

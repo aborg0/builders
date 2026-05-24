@@ -1,5 +1,6 @@
 package builders.scalafix
 
+import builders.scalafix.GenerateBuilderCompanionRenderer.SmartCtorResultKind
 import utest._
 
 object GenerateBuilderTextRewriterOptionMatrixTests extends TestSuite {
@@ -103,17 +104,16 @@ case class EffectUser(id: Int)
 
       assert(actual.contains("private val style: builders.configuration.BuilderStyle = builders.configuration.BuilderStyle.Effect"))
       assert(actual.contains("private val modeTag: String = \"effect\""))
-      assert(actual.contains("private val builderApi: Any = api.ValidatedBuilderGenerator.builder[EffectUser]"))
-      assert(actual.contains("private type Builder = api.ValidatedBuilderSelectable[EffectUser, ?, (id: Int)]"))
-      assert(actual.contains("def builder: Builder = api.ValidatedBuilderGenerator.builder[EffectUser]"))
-      assert(actual.contains("def builderEffect: Builder = builder"))
+      assert(actual.contains("private val builderApi: Any = builder"))
+      assert(actual.contains("private type Builder = ValidatedBuilderSelectable[EffectUser, ?, (id: Int)]"))
+      assert(actual.contains("def builder: Builder = builderState0()"))
+      assert(actual.contains("def builderEffect: Builder = builderState0()"))
       assert(actual.contains("private type IdInput = Int"))
       assert(actual.contains("private type AfterStep1 = zio.prelude.ZValidation[Nothing, ?, EffectUser]"))
-      assert(actual.contains("private def fieldStep1Id(current: Builder, input: IdInput): AfterStep1"))
-      assert(actual.contains("private val fieldSteps: List[String] = List(idStepName)"))
+      assert(actual.contains("private inline def builderState0(): Builder ="))
+      assert(actual.contains("Tuple1((idValue: IdInput) => buildEffectFromValues(idValue).asInstanceOf[Any])"))
       assert(actual.contains("private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, ?, EffectUser] ="))
-      assert(actual.contains("private def builderRef: Builder = builder"))
-      assert(actual.contains("private def builderEffectRef: Any = builderEffect"))
+      assert(actual.contains("private inline given idSmartConstructor: (IdInput => IdValidation) ="))
       assert(actual.contains("private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.WrappedOnly"))
       assert(actual.contains("private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.CustomPrefixOnly"))
       assert(actual.contains("private val effectMode: builders.configuration.EffectMode = builders.configuration.EffectMode.AbstractCapability"))
@@ -136,16 +136,16 @@ case class NamedUser(id: Int, code: String)
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
 
-      assert(actual.contains("private type Builder = api.ValidatedBuilderSelectable[NamedUser, ?, (id: Int, code: String)]"))
-      assert(actual.contains("def make: Builder = api.ValidatedBuilderGenerator.builder[NamedUser]"))
+      assert(actual.contains("private type Builder = ValidatedBuilderSelectable[NamedUser, ?, (id: Int, code: String)]"))
+      assert(actual.contains("def make: Builder = builderState0()"))
       assert(!actual.contains("def makeAllow:"))
       assert(!actual.contains("def makeNoAllow:"))
-      assert(!actual.contains("private def makeAllowRef:"))
-      assert(!actual.contains("private def makeNoAllowRef:"))
-      assert(actual.contains("val afterStep1: AfterStep1 = fieldStep1Id(make, idValue)"))
+      assert(!actual.contains("derivedAllow"))
+      assert(!actual.contains("derivedNoAllow"))
+      assert(actual.contains("Tuple1((idValue: IdInput) => builderState1(idValue).asInstanceOf[Any])"))
     }
 
-    test("validating style preserves smart-constructor seams") {
+    test("validating style emits local builder seams") {
       val input =
         """import builders.configuration.*
 
@@ -155,12 +155,95 @@ case class SmartCtorUser(id: Int, code: String)
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
 
-      assert(actual.contains("def builder: Builder = api.ValidatedBuilderGenerator.builder[SmartCtorUser]"))
-      assert(actual.contains("def builderAllow: Builder = api.ValidatedBuilderGenerator.builderAllow[SmartCtorUser]"))
-      assert(actual.contains("def builderNoAllow: Builder = api.ValidatedBuilderGenerator.builderNoAllow[SmartCtorUser]"))
-      assert(actual.contains("private def derived: api.ValidatedBuilderGenerator[SmartCtorUser] = api.ValidatedBuilderGenerator.derived[SmartCtorUser]"))
-      assert(actual.contains("private def derivedAllow: api.ValidatedBuilderGenerator[SmartCtorUser] = api.ValidatedBuilderGenerator.derivedAllow[SmartCtorUser]"))
-      assert(actual.contains("private def derivedNoAllow: api.ValidatedBuilderGenerator[SmartCtorUser] = api.ValidatedBuilderGenerator.derivedNoAllow[SmartCtorUser]"))
+      assert(actual.contains("def builder: Builder = builderState0()"))
+      assert(actual.contains("def builderAllow: Builder = builderState0()"))
+      assert(actual.contains("def builderNoAllow: Builder = builderState0()"))
+      assert(actual.contains("private inline given idSmartConstructor: (IdInput => IdValidation) ="))
+      assert(actual.contains("private inline given codeSmartConstructor: (CodeInput => CodeValidation) ="))
+      assert(!actual.contains("ValidatedBuilderGenerator.derived"))
+    }
+
+    test("validating renderer emits smart constructor conversions") {
+      val actual = GenerateBuilderCompanionRenderer.render(
+        className = "SmartRenderedUser",
+        fields = List(
+          GenerateBuilderCompanionRenderer.ClassField(
+            name = "code",
+            typeExpr = "OpaqueCode",
+            smartCtorMethodName = Some("apply"),
+            smartCtorResultKind = Some(SmartCtorResultKind.EitherResult)
+          ),
+          GenerateBuilderCompanionRenderer.ClassField(
+            name = "op",
+            typeExpr = "OpaqueOp",
+            smartCtorMethodName = Some("apply"),
+            smartCtorResultKind = Some(SmartCtorResultKind.Validation)
+          ),
+          GenerateBuilderCompanionRenderer.ClassField(
+            name = "amount",
+            typeExpr = "PositiveInt",
+            smartCtorMethodName = Some("make"),
+            smartCtorResultKind = Some(SmartCtorResultKind.EitherResult)
+          ),
+          GenerateBuilderCompanionRenderer.ClassField(
+            name = "region",
+            typeExpr = "Region",
+            smartCtorMethodName = Some("apply"),
+            smartCtorResultKind = Some(SmartCtorResultKind.Direct)
+          )
+        ),
+        options = DecodedGenerateBuilder.default
+      )
+
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
+      assert(actual.contains("OpaqueOp(opValue).asInstanceOf[OpValidation]"))
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(PositiveInt.make(amountValue)).asInstanceOf[AmountValidation]"))
+      assert(actual.contains("zio.prelude.ZValidation.succeed(Region(regionValue)).asInstanceOf[RegionValidation]"))
+    }
+
+    test("validating rewrite discovers smart constructors from source") {
+      val input =
+        """import builders.configuration.*
+import zio.prelude.ZValidation
+
+opaque type OpaqueCode = String
+object OpaqueCode {
+  def apply(raw: String): Either[String, OpaqueCode] = Right(raw: OpaqueCode)
+}
+
+opaque type OpaqueOp = String
+object OpaqueOp {
+  def apply(raw: String): ZValidation[Nothing, String, OpaqueOp] = zio.prelude.Validation.succeed(raw: OpaqueOp)
+}
+
+@GenerateBuilder(style = BuilderStyle.Validating)
+case class SmartDiscoveredUser(code: OpaqueCode, op: OpaqueOp)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
+      assert(actual.contains("OpaqueOp(opValue).asInstanceOf[OpValidation]"))
+    }
+
+    test("validating rewrite discovers subtype newtype make from alias owner") {
+      val input =
+        """import builders.configuration.*
+import zio.prelude.Subtype
+import zio.prelude.Assertion.greaterThanOrEqualTo
+
+object SequenceNumber extends Subtype[Int] {
+  override inline def assertion = greaterThanOrEqualTo(0)
+}
+type SequenceNumber = SequenceNumber.Type
+
+@GenerateBuilder(style = BuilderStyle.Validating)
+case class SmartSubtypeUser(sequence: SequenceNumber)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("SequenceNumber.make(sequenceValue).asInstanceOf[SequenceValidation]"))
     }
 
     test("existing companion is not regenerated") {

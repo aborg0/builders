@@ -10,7 +10,8 @@ final case class DecodedGenerateBuilder(
   mergeMode: MergeMode,
   builderMethodName: String,
   generateExtraVariants: Boolean,
-  simpleOptionalValues: SimpleOptionalValues
+  simpleOptionalValues: SimpleOptionalValues,
+  smartConstructorMode: SmartConstructorMode
 )
 
 object DecodedGenerateBuilder {
@@ -24,7 +25,8 @@ object DecodedGenerateBuilder {
     mergeMode = MergeMode.GeneratedRegionOnly,
     builderMethodName = "builder",
     generateExtraVariants = true,
-    simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues
+    simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
+    smartConstructorMode = SmartConstructorMode.ZValidation
   )
 }
 
@@ -39,7 +41,8 @@ object GenerateBuilderAnnotationDecoder {
     "mergeMode",
     "builderMethodName",
     "generateExtraVariants",
-    "simpleOptionalValues"
+    "simpleOptionalValues",
+    "smartConstructorMode"
   )
 
   def decode(arguments: Map[String, String]): Either[List[String], DecodedGenerateBuilder] = {
@@ -96,6 +99,12 @@ object GenerateBuilderAnnotationDecoder {
       default = DecodedGenerateBuilder.default.simpleOptionalValues,
       key = "simpleOptionalValues"
     )
+    val smartConstructorModeResult = parseEnum(
+      raw = arguments.get("smartConstructorMode"),
+      allValues = SmartConstructorMode.all.map(v => v.value -> v).toMap,
+      default = DecodedGenerateBuilder.default.smartConstructorMode,
+      key = "smartConstructorMode"
+    )
     val builderMethodNameResult = parseBuilderMethodName(arguments.get("builderMethodName"))
     val generateExtraVariantsResult = parseBoolean(
       raw = arguments.get("generateExtraVariants"),
@@ -112,6 +121,7 @@ object GenerateBuilderAnnotationDecoder {
       staleCheckModeResult.left.toOption.toList.flatten ++
       mergeModeResult.left.toOption.toList.flatten ++
       simpleOptionalValuesResult.left.toOption.toList.flatten ++
+      smartConstructorModeResult.left.toOption.toList.flatten ++
       builderMethodNameResult.left.toOption.toList.flatten ++
       generateExtraVariantsResult.left.toOption.toList.flatten
 
@@ -129,7 +139,8 @@ object GenerateBuilderAnnotationDecoder {
           mergeMode = mergeModeResult.toOption.get,
           builderMethodName = builderMethodNameResult.toOption.get,
           generateExtraVariants = generateExtraVariantsResult.toOption.get,
-          simpleOptionalValues = simpleOptionalValuesResult.toOption.get
+          simpleOptionalValues = simpleOptionalValuesResult.toOption.get,
+          smartConstructorMode = smartConstructorModeResult.toOption.get
         )
       )
     }
