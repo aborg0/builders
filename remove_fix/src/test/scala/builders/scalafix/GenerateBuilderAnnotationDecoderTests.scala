@@ -57,6 +57,20 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
       }
     }
 
+    test("every ErrorCombination value decodes") {
+      ErrorCombination.all.foreach { mode =>
+        val decoded = GenerateBuilderAnnotationDecoder.decode(Map("combineErrors" -> mode.value))
+        assert(decoded == Right(DecodedGenerateBuilder.default.copy(combineErrors = mode)))
+      }
+    }
+
+    test("every EffectFailureMode value decodes") {
+      EffectFailureMode.all.foreach { mode =>
+        val decoded = GenerateBuilderAnnotationDecoder.decode(Map("effectFailureMode" -> mode.value))
+        assert(decoded == Right(DecodedGenerateBuilder.default.copy(effectFailureMode = mode)))
+      }
+    }
+
     test("qualified enum values decode") {
       val decoded = GenerateBuilderAnnotationDecoder.decode(
         Map(
@@ -69,7 +83,9 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
           "mergeMode" -> "MergeMode.ReplaceGeneratedMembers",
           "builderMethodName" -> "\"make\"",
           "generateExtraVariants" -> "false",
-          "simpleOptionalValues" -> "SimpleOptionalValues.OptionalValuesWithEmptyDefaults"
+          "simpleOptionalValues" -> "SimpleOptionalValues.OptionalValuesWithEmptyDefaults",
+          "combineErrors" -> "ErrorCombination.LeastUpperBound",
+          "effectFailureMode" -> "EffectFailureMode.OrElseProvided"
         )
       )
       assert(
@@ -85,7 +101,9 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
             builderMethodName = "make",
             generateExtraVariants = false,
             simpleOptionalValues = SimpleOptionalValues.OptionalValuesWithEmptyDefaults,
-            smartConstructorMode = SmartConstructorMode.ZValidation
+            smartConstructorMode = SmartConstructorMode.ZValidation,
+            combineErrors = ErrorCombination.LeastUpperBound,
+            effectFailureMode = EffectFailureMode.OrElseProvided
           )
         )
       )
@@ -98,6 +116,8 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
           "builderMethodName" -> "\"not-valid-name!\"",
           "generateExtraVariants" -> "maybe",
           "simpleOptionalValues" -> "not-a-mode",
+          "combineErrors" -> "not-a-combination",
+          "effectFailureMode" -> "not-a-failure-mode",
           "unknownOption" -> "42"
         )
       )
@@ -108,6 +128,8 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
       assert(errors.exists(_.contains("Invalid value '\"not-valid-name!\"' for builderMethodName")))
       assert(errors.exists(_.contains("Invalid value 'maybe' for generateExtraVariants")))
       assert(errors.exists(_.contains("Invalid value 'not-a-mode' for simpleOptionalValues")))
+      assert(errors.exists(_.contains("Invalid value 'not-a-combination' for combineErrors")))
+      assert(errors.exists(_.contains("Invalid value 'not-a-failure-mode' for effectFailureMode")))
     }
   }
 }

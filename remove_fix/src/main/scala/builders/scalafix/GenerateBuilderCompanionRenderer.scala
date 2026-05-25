@@ -28,6 +28,8 @@ object GenerateBuilderCompanionRenderer {
     val staleCheckModeExpr = staleCheckModeToExpr(options.staleCheckMode)
     val mergeModeExpr = mergeModeToExpr(options.mergeMode)
     val smartConstructorModeExpr = smartConstructorModeToExpr(options.smartConstructorMode)
+    val errorCombinationExpr = errorCombinationToExpr(options.combineErrors)
+    val effectFailureModeExpr = effectFailureModeToExpr(options.effectFailureMode)
     val configurationMembers = renderConfigurationMembers(
       options.style,
       primitivePolicyExpr,
@@ -36,7 +38,9 @@ object GenerateBuilderCompanionRenderer {
       conversionModeExpr,
       staleCheckModeExpr,
       mergeModeExpr,
-      smartConstructorModeExpr
+      smartConstructorModeExpr,
+      errorCombinationExpr,
+      effectFailureModeExpr
     )
     val builderApiExpr = builderApiExpression(className, options)
     val builderMembers = styleSpecificBuilderMembers(className, fields, options)
@@ -63,7 +67,9 @@ $configurationMembers
     conversionModeExpr: String,
     staleCheckModeExpr: String,
     mergeModeExpr: String,
-    smartConstructorModeExpr: String
+    smartConstructorModeExpr: String,
+    errorCombinationExpr: String,
+    effectFailureModeExpr: String
   ): String = {
     val base = List(
       s"  private val primitivePolicy: builders.configuration.PrimitivePolicy = $primitivePolicyExpr",
@@ -76,8 +82,17 @@ $configurationMembers
     val smart = style match {
       case BuilderStyle.Simple =>
         Nil
-      case BuilderStyle.Validating | BuilderStyle.Effect =>
-        List(s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr")
+      case BuilderStyle.Validating =>
+        List(
+          s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr",
+          s"  private val combineErrors: builders.configuration.ErrorCombination = $errorCombinationExpr"
+        )
+      case BuilderStyle.Effect =>
+        List(
+          s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr",
+          s"  private val combineErrors: builders.configuration.ErrorCombination = $errorCombinationExpr",
+          s"  private val effectFailureMode: builders.configuration.EffectFailureMode = $effectFailureModeExpr"
+        )
     }
 
     (base ++ smart).mkString("\n")
@@ -175,6 +190,22 @@ $configurationMembers
       "builders.configuration.SmartConstructorMode.Either"
     case SmartConstructorMode.Direct =>
       "builders.configuration.SmartConstructorMode.Direct"
+  }
+
+  private def errorCombinationToExpr(value: ErrorCombination): String = value match {
+    case ErrorCombination.Union =>
+      "builders.configuration.ErrorCombination.Union"
+    case ErrorCombination.LeastUpperBound =>
+      "builders.configuration.ErrorCombination.LeastUpperBound"
+  }
+
+  private def effectFailureModeToExpr(value: EffectFailureMode): String = value match {
+    case EffectFailureMode.Propagate =>
+      "builders.configuration.EffectFailureMode.Propagate"
+    case EffectFailureMode.OrDie =>
+      "builders.configuration.EffectFailureMode.OrDie"
+    case EffectFailureMode.OrElseProvided =>
+      "builders.configuration.EffectFailureMode.OrElseProvided"
   }
 
   private def renderSimpleFieldMembers(className: String, fields: List[ClassField], options: DecodedGenerateBuilder): String = {
@@ -532,7 +563,7 @@ $configurationMembers
         s"  private type ${capitalize(sanitized)}Input = ${field.typeExpr}"
       }
 
-      val afterStepTypeAliases = renderGenericAfterStepTypeAliases(className, fields, terminalType)
+      val afterStepTypeAliases = renderGenericAfterStepTypeAliases(fields, terminalType)
 
       val stepMethodsAndNames = fields.zipWithIndex.flatMap {
         case (field, index) =>
@@ -583,7 +614,10 @@ $configurationMembers
     }
   }
 
-  private def renderGenericAfterStepTypeAliases(className: String, fields: List[ClassField], terminalType: String): List[String] = {
+  private def renderGenericAfterStepTypeAliases(
+    fields: List[ClassField],
+    terminalType: String
+  ): List[String] = {
     val inputTypeNames = fields.map { field =>
       capitalize(sanitizeFieldName(field.name)) + "Input"
     }
@@ -596,11 +630,10 @@ $configurationMembers
         val rhs = if (stepIndex == fields.size) {
           terminalType
         } else {
-          val remaining = fields.drop(stepIndex).zip(inputTypeNames.drop(stepIndex)).map {
-            case (field, inputName) =>
-              s"${sanitizeFieldName(field.name)}: $inputName"
-          }.mkString(", ")
-          s"ValidatedBuilderSelectable[$className, ?, ($remaining)]"
+          val nextLabel = sanitizeFieldName(fields(stepIndex).name)
+          val nextInput = inputTypeNames(stepIndex)
+          val nextAfter = s"AfterStep${stepIndex + 1}"
+          s"($nextLabel: $nextInput => $nextAfter)"
         }
         s"  private type $afterTypeName = $rhs"
     }.reverse.toList
@@ -610,13 +643,6 @@ $configurationMembers
     fields.map { field =>
       val sanitized = sanitizeFieldName(field.name)
       s"$sanitized: ${field.typeExpr}"
-    }.mkString(", ")
-  }
-
-  private def renderValidatedBuilderInputTuple(fields: List[ClassField]): String = {
-    fields.map { field =>
-      val sanitized = sanitizeFieldName(field.name)
-      s"$sanitized: ${renderValidatedInputTypeExpr(field)}"
     }.mkString(", ")
   }
 
@@ -654,7 +680,8 @@ $configurationMembers
       fields,
       options,
       buildMethodName = "buildValidationFromValues",
-      extraVariantNames = extraVariantNames
+      extraVariantNames = extraVariantNames,
+      isEffect = false
     )
   }
 
@@ -670,7 +697,8 @@ $configurationMembers
       fields,
       options,
       buildMethodName = "buildEffectFromValues",
-      extraVariantNames = extraVariantNames
+      extraVariantNames = extraVariantNames,
+      isEffect = true
     )
   }
 
@@ -679,61 +707,85 @@ $configurationMembers
     fields: List[ClassField],
     options: DecodedGenerateBuilder,
     buildMethodName: String,
-    extraVariantNames: List[String]
+    extraVariantNames: List[String],
+    isEffect: Boolean
   ): String = {
-    val terminalType = s"zio.prelude.ZValidation[Nothing, ?, $className]"
+    val combinedErrorTypeExpr = renderCombinedErrorTypeExpr(fields, options.combineErrors)
+    val terminalType =
+      if (isEffect && options.effectFailureMode != EffectFailureMode.Propagate) {
+        s"zio.ZIO[Any, Nothing, $className]"
+      } else {
+        s"zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, $className]"
+      }
     val publicBuilderMethodName = options.builderMethodName
-    val selectableSupport = renderLocalValidatedSelectableSupport()
+    val requiresFallback = isEffect && options.effectFailureMode == EffectFailureMode.OrElseProvided
+    val publicMethodSignature =
+      if (requiresFallback) {
+        s"def $publicBuilderMethodName(fallback: => zio.ZIO[Any, Nothing, $className]): Builder = builderState0(fallback)"
+      } else {
+        s"def $publicBuilderMethodName: Builder = builderState0()"
+      }
     val builderTypeDef =
       if (fields.isEmpty) {
-        s"  private type Builder = $terminalType"
+        s"  type Builder = $terminalType"
       } else {
-        s"  private type Builder = ValidatedBuilderSelectable[$className, ?, (${renderValidatedBuilderInputTuple(fields)})]"
+        val first = fields.head
+        val firstName = sanitizeFieldName(first.name)
+        val firstInput = s"${capitalize(firstName)}Input"
+        s"  type Builder = ($firstName: $firstInput => AfterStep1)"
       }
     val publicBuilderDefs =
-      (List(s"  def $publicBuilderMethodName: Builder = builderState0()") ++
-        extraVariantNames.map(variantName => s"  def $variantName: Builder = builderState0()"))
+      (List(s"  $publicMethodSignature") ++
+        extraVariantNames.map { variantName =>
+          if (requiresFallback) {
+            s"  def $variantName(fallback: => zio.ZIO[Any, Nothing, $className]): Builder = builderState0(fallback)"
+          } else {
+            s"  def $variantName: Builder = builderState0()"
+          }
+        })
         .mkString("\n")
-    val fieldMembers = renderLocalValidatedFieldMembers(className, fields, terminalType, buildMethodName)
-    s"""$selectableSupport
-$builderTypeDef
+    val fieldMembers = renderLocalValidatedFieldMembers(
+      className,
+      fields,
+      terminalType,
+      buildMethodName,
+      combinedErrorTypeExpr,
+      isEffect,
+      options.effectFailureMode,
+      requiresFallback
+    )
+s"""$builderTypeDef
 $publicBuilderDefs
 $fieldMembers"""
-  }
-
-  private def renderLocalValidatedSelectableSupport(): String = {
-    """private class ValidatedBuilderSelectable[T, E, R <: scala.NamedTuple.AnyNamedTuple](
-  private val underlying: Tuple1[Any => Any]
-) extends Selectable {
-  type Fields = BuilderFields[R, T, E]
-  def selectDynamic(name: String): Any = underlying._1
-}
-private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.NamedTuple.AnyNamedTuple =
-  scala.NamedTuple.DropNames[R] match {
-    case Tuple1[h] =>
-      scala.NamedTuple[scala.NamedTuple.Names[R], Tuple1[h => zio.prelude.ZValidation[Nothing, E, T]]]
-    case h *: t =>
-      scala.NamedTuple[
-        Tuple1[Tuple.Head[scala.NamedTuple.Names[R]]],
-        Tuple1[h => ValidatedBuilderSelectable[T, E, scala.NamedTuple[Tuple.Tail[scala.NamedTuple.Names[R]], t]]]
-      ]
-  }"""
   }
 
   private def renderLocalValidatedFieldMembers(
     className: String,
     fields: List[ClassField],
     terminalType: String,
-    buildMethodName: String
+    buildMethodName: String,
+    combinedErrorTypeExpr: String,
+    isEffect: Boolean,
+    effectFailureMode: EffectFailureMode,
+    requiresFallback: Boolean
   ): String = {
     val inputAliases = fields.map { field =>
       val sanitized = sanitizeFieldName(field.name)
       s"  private type ${capitalize(sanitized)}Input = ${renderValidatedInputTypeExpr(field)}"
     }
-    val afterStepTypeAliases = renderGenericAfterStepTypeAliases(className, fields, terminalType)
+    val afterStepTypeAliases = renderGenericAfterStepTypeAliases(fields, terminalType)
     val validationHelpers = renderValidationHelpers(fields)
-    val stateMethods = renderSelectableStateMethods(className, fields, buildMethodName)
-    val buildHelper = renderLocalValidationBuildHelper(className, fields, terminalType, buildMethodName)
+    val stateMethods = renderSelectableStateMethods(className, fields, buildMethodName, requiresFallback)
+    val buildHelper = renderLocalValidationBuildHelper(
+      className,
+      fields,
+      terminalType,
+      buildMethodName,
+      combinedErrorTypeExpr,
+      isEffect,
+      effectFailureMode,
+      requiresFallback
+    )
 
     (inputAliases ++ afterStepTypeAliases ++ validationHelpers ++ stateMethods :+ buildHelper).mkString("\n")
   }
@@ -747,7 +799,8 @@ private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.N
       val sanitized = sanitizeFieldName(field.name)
       val capitalized = capitalize(sanitized)
       val helperExpr = renderValidationHelperExpr(field, sanitized, capitalized)
-      s"""  private type ${capitalized}Validation = zio.prelude.ZValidation[Nothing, ?, ${field.typeExpr}]
+      val validationErrorTypeExpr = renderFieldErrorTypeExpr(field)
+      s"""  private type ${capitalized}Validation = zio.prelude.ZValidation[Nothing, $validationErrorTypeExpr, ${field.typeExpr}]
   private inline given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
     (${sanitized}Value: ${capitalized}Input) => $helperExpr
   private inline def validate$capitalized(${sanitized}Value: ${capitalized}Input): ${capitalized}Validation =
@@ -792,40 +845,78 @@ private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.N
     }
   }
 
-  private def renderSelectableStateMethods(className: String, fields: List[ClassField], buildMethodName: String): List[String] = {
+  private def renderSelectableStateMethods(
+    className: String,
+    fields: List[ClassField],
+    buildMethodName: String,
+    requiresFallback: Boolean
+  ): List[String] = {
     if (fields.isEmpty) {
-      List(s"  private inline def builderState0(): Builder = $buildMethodName()")
+      val fallbackParam =
+        if (requiresFallback) {
+          s"fallback: => zio.ZIO[Any, Nothing, $className]"
+        } else {
+          ""
+        }
+      val fallbackArg = if (requiresFallback) "fallback" else ""
+      val paramSection = if (fallbackParam.isEmpty) "" else fallbackParam
+      val callArgs = if (fallbackArg.isEmpty) "" else fallbackArg
+      List(s"  private inline def builderState0($paramSection): Builder = $buildMethodName($callArgs)")
     } else {
       val builderStates = (0 until fields.size).map { index =>
         val methodName = s"builderState$index"
-        val params = fields.take(index).map { field =>
+        val valueParams = fields.take(index).map { field =>
           val sanitized = sanitizeFieldName(field.name)
           s"${sanitized}Value: ${capitalize(sanitized)}Input"
-        }.mkString(", ")
+        }
+        val fallbackParams =
+          if (requiresFallback) {
+            List(s"fallback: => zio.ZIO[Any, Nothing, $className]")
+          } else {
+            Nil
+          }
+        val params = (fallbackParams ++ valueParams).mkString(", ")
         val returnType = if (index == 0) "Builder" else s"AfterStep$index"
         val currentField = fields(index)
         val currentName = sanitizeFieldName(currentField.name)
         val currentInputType = s"${capitalize(currentName)}Input"
-        val nextArgs = (fields.take(index).map(field => sanitizeFieldName(field.name) + "Value") :+ s"${currentName}Value").mkString(", ")
+        val nextArgValues = fields.take(index).map(field => sanitizeFieldName(field.name) + "Value") :+ s"${currentName}Value"
+        val nextArgs =
+          if (requiresFallback) {
+            (List("fallback") ++ nextArgValues).mkString(", ")
+          } else {
+            nextArgValues.mkString(", ")
+          }
         val nextExpr =
           if (index == fields.size - 1) {
             s"$buildMethodName($nextArgs)"
           } else {
             s"builderState${index + 1}($nextArgs)"
           }
-        val remainingTuple = renderValidatedBuilderInputTuple(fields.drop(index))
         val paramSection = if (params.isEmpty) "" else params
         s"""  private inline def $methodName($paramSection): $returnType =
-    new ValidatedBuilderSelectable[$className, Any, ($remainingTuple)](
-      Tuple1((${currentName}Value: $currentInputType) => $nextExpr.asInstanceOf[Any])
-    ).asInstanceOf[$returnType]"""
+    ($currentName = (${currentName}Value: $currentInputType) => $nextExpr)"""
       }
       val terminalState = {
-        val params = fields.map { field =>
+        val valueParams = fields.map { field =>
           val sanitized = sanitizeFieldName(field.name)
           s"${sanitized}Value: ${capitalize(sanitized)}Input"
-        }.mkString(", ")
-        s"  private inline def builderState${fields.size}($params): AfterStep${fields.size} = $buildMethodName(${fields.map(field => sanitizeFieldName(field.name) + "Value").mkString(", ")})"
+        }
+        val fallbackParams =
+          if (requiresFallback) {
+            List(s"fallback: => zio.ZIO[Any, Nothing, $className]")
+          } else {
+            Nil
+          }
+        val params = (fallbackParams ++ valueParams).mkString(", ")
+        val valueArgs = fields.map(field => sanitizeFieldName(field.name) + "Value")
+        val callArgs =
+          if (requiresFallback) {
+            (List("fallback") ++ valueArgs).mkString(", ")
+          } else {
+            valueArgs.mkString(", ")
+          }
+        s"  private inline def builderState${fields.size}($params): AfterStep${fields.size} = $buildMethodName($callArgs)"
       }
       (builderStates :+ terminalState).toList
     }
@@ -835,17 +926,48 @@ private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.N
     className: String,
     fields: List[ClassField],
     terminalType: String,
-    buildMethodName: String
+    buildMethodName: String,
+    combinedErrorTypeExpr: String,
+    isEffect: Boolean,
+    effectFailureMode: EffectFailureMode,
+    requiresFallback: Boolean
   ): String = {
+    val fallbackParamDecl =
+      if (requiresFallback) {
+        s", fallback: => zio.ZIO[Any, Nothing, $className]"
+      } else {
+        ""
+      }
+
+    def finalizeEffect(validationExpr: String): String = {
+      if (!isEffect || effectFailureMode == EffectFailureMode.Propagate) {
+        validationExpr
+      } else if (effectFailureMode == EffectFailureMode.OrDie) {
+        s"$validationExpr.toEither match { case Right(value) => zio.ZIO.succeed(value); case Left(errors) => zio.ZIO.dieMessage(errors.toString) }"
+      } else {
+        s"$validationExpr.toEither match { case Right(value) => zio.ZIO.succeed(value); case Left(_) => fallback }"
+      }
+    }
+
     if (fields.isEmpty) {
-      s"""  private def $buildMethodName(): $terminalType =
-    zio.prelude.ZValidation.succeed($className())"""
+      val validationExpr = s"zio.prelude.ZValidation.succeed($className()).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, $className]]"
+      val finalExpr = finalizeEffect(validationExpr)
+      s"""  private def $buildMethodName(${
+        if (requiresFallback) {
+          s"fallback: => zio.ZIO[Any, Nothing, $className]"
+        } else {
+          ""
+        }
+      }): $terminalType =
+    $finalExpr"""
     } else if (fields.size == 1) {
       val field = fields.head
       val sanitized = sanitizeFieldName(field.name)
       val capitalized = capitalize(sanitized)
-      s"""  private def $buildMethodName(${sanitized}Value: ${capitalized}Input): $terminalType =
-    validate$capitalized(${sanitized}Value).map(${sanitized}Validated => $className(${sanitized}Validated))"""
+      val validationExpr = s"validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]].map(${sanitized}Validated => $className(${sanitized}Validated))"
+      val finalExpr = finalizeEffect(validationExpr)
+      s"""  private def $buildMethodName(${sanitized}Value: ${capitalized}Input$fallbackParamDecl): $terminalType =
+    $finalExpr"""
     } else {
       val parameterDecl = fields.map { field =>
         val sanitized = sanitizeFieldName(field.name)
@@ -854,13 +976,39 @@ private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.N
       val validationCalls = fields.map { field =>
         val sanitized = sanitizeFieldName(field.name)
         val capitalized = capitalize(sanitized)
-        s"      validate$capitalized(${sanitized}Value)"
+        s"      validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]]"
       }.mkString(",\n")
       val validatedParams = fields.map(field => sanitizeFieldName(field.name) + "Validated").mkString(", ")
-      s"""  private def $buildMethodName($parameterDecl): $terminalType =
-    zio.prelude.Validation.validateWith(
-$validationCalls
-    )(($validatedParams) => $className($validatedParams))"""
+      val validationExpr = s"zio.prelude.Validation.validateWith(\n$validationCalls\n    )(($validatedParams) => $className($validatedParams))"
+      val finalExpr = finalizeEffect(validationExpr)
+      s"""  private def $buildMethodName($parameterDecl$fallbackParamDecl): $terminalType =
+    $finalExpr"""
+    }
+  }
+
+  private def renderFieldErrorTypeExpr(field: ClassField): String = {
+    field.smartCtorResultKind match {
+      case Some(SmartCtorResultKind.Direct) =>
+        "Nothing"
+      case Some(SmartCtorResultKind.Validation) | Some(SmartCtorResultKind.EitherResult) =>
+        "Any"
+      case None =>
+        "Nothing"
+    }
+  }
+
+  private def renderCombinedErrorTypeExpr(fields: List[ClassField], combineErrors: ErrorCombination): String = {
+    val fieldErrorTypes = fields.map(renderFieldErrorTypeExpr)
+    combineErrors match {
+      case ErrorCombination.LeastUpperBound =>
+        if (fieldErrorTypes.forall(_ == "Nothing")) "Nothing" else "Any"
+      case ErrorCombination.Union =>
+        val nonNothing = fieldErrorTypes.filterNot(_ == "Nothing").distinct
+        if (nonNothing.isEmpty) {
+          "Nothing"
+        } else {
+          nonNothing.mkString(" | ")
+        }
     }
   }
 

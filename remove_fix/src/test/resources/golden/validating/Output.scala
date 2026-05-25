@@ -14,53 +14,33 @@ object ValidatingUser {
   private val style: builders.configuration.BuilderStyle = builders.configuration.BuilderStyle.Validating
   private val modeTag: String = "validating"
   private val builderApi: Any = builder
-  private class ValidatedBuilderSelectable[T, E, R <: scala.NamedTuple.AnyNamedTuple](
-  private val underlying: Tuple1[Any => Any]
-) extends Selectable {
-  type Fields = BuilderFields[R, T, E]
-  def selectDynamic(name: String): Any = underlying._1
-}
-private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.NamedTuple.AnyNamedTuple =
-  scala.NamedTuple.DropNames[R] match {
-    case Tuple1[h] =>
-      scala.NamedTuple[scala.NamedTuple.Names[R], Tuple1[h => zio.prelude.ZValidation[Nothing, E, T]]]
-    case h *: t =>
-      scala.NamedTuple[
-        Tuple1[Tuple.Head[scala.NamedTuple.Names[R]]],
-        Tuple1[h => ValidatedBuilderSelectable[T, E, scala.NamedTuple[Tuple.Tail[scala.NamedTuple.Names[R]], t]]]
-      ]
-  }
-  private type Builder = ValidatedBuilderSelectable[ValidatingUser, ?, (id: Int, code: String)]
+    type Builder = (id: IdInput => AfterStep1)
   def builder: Builder = builderState0()
   def builderAllow: Builder = builderState0()
   def builderNoAllow: Builder = builderState0()
   private type IdInput = Int
   private type CodeInput = String
-  private type AfterStep1 = ValidatedBuilderSelectable[ValidatingUser, ?, (code: CodeInput)]
-  private type AfterStep2 = zio.prelude.ZValidation[Nothing, ?, ValidatingUser]
-  private type IdValidation = zio.prelude.ZValidation[Nothing, ?, Int]
+  private type AfterStep1 = (code: CodeInput => AfterStep2)
+  private type AfterStep2 = zio.prelude.ZValidation[Nothing, Nothing, ValidatingUser]
+  private type IdValidation = zio.prelude.ZValidation[Nothing, Nothing, Int]
   private inline given idSmartConstructor: (IdInput => IdValidation) =
     (idValue: IdInput) => zio.prelude.ZValidation.succeed(idValue).asInstanceOf[IdValidation]
   private inline def validateId(idValue: IdInput): IdValidation =
     summon[IdInput => IdValidation].apply(idValue)
-  private type CodeValidation = zio.prelude.ZValidation[Nothing, ?, String]
+  private type CodeValidation = zio.prelude.ZValidation[Nothing, Nothing, String]
   private inline given codeSmartConstructor: (CodeInput => CodeValidation) =
     (codeValue: CodeInput) => zio.prelude.ZValidation.succeed(codeValue).asInstanceOf[CodeValidation]
   private inline def validateCode(codeValue: CodeInput): CodeValidation =
     summon[CodeInput => CodeValidation].apply(codeValue)
   private inline def builderState0(): Builder =
-    new ValidatedBuilderSelectable[ValidatingUser, Any, (id: Int, code: String)](
-      Tuple1((idValue: IdInput) => builderState1(idValue).asInstanceOf[Any])
-    ).asInstanceOf[Builder]
+    (id = (idValue: IdInput) => builderState1(idValue))
   private inline def builderState1(idValue: IdInput): AfterStep1 =
-    new ValidatedBuilderSelectable[ValidatingUser, Any, (code: String)](
-      Tuple1((codeValue: CodeInput) => buildValidationFromValues(idValue, codeValue).asInstanceOf[Any])
-    ).asInstanceOf[AfterStep1]
+    (code = (codeValue: CodeInput) => buildValidationFromValues(idValue, codeValue))
   private inline def builderState2(idValue: IdInput, codeValue: CodeInput): AfterStep2 = buildValidationFromValues(idValue, codeValue)
-  private def buildValidationFromValues(idValue: IdInput, codeValue: CodeInput): zio.prelude.ZValidation[Nothing, ?, ValidatingUser] =
+  private def buildValidationFromValues(idValue: IdInput, codeValue: CodeInput): zio.prelude.ZValidation[Nothing, Nothing, ValidatingUser] =
     zio.prelude.Validation.validateWith(
-      validateId(idValue),
-      validateCode(codeValue)
+      validateId(idValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Nothing, Int]],
+      validateCode(codeValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Nothing, String]]
     )((idValidated, codeValidated) => ValidatingUser(idValidated, codeValidated))
   private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.PrimitiveAndWrappedIfDerivable
   private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.FullCollectionAware
@@ -69,5 +49,6 @@ private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.N
   private val staleCheckMode: builders.configuration.StaleCheckMode = builders.configuration.StaleCheckMode.SignatureHash
   private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.GeneratedRegionOnly
   private val smartConstructorMode: builders.configuration.SmartConstructorMode = builders.configuration.SmartConstructorMode.ZValidation
+  private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union
   // format: on
 }

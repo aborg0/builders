@@ -11,7 +11,9 @@ final case class DecodedGenerateBuilder(
   builderMethodName: String,
   generateExtraVariants: Boolean,
   simpleOptionalValues: SimpleOptionalValues,
-  smartConstructorMode: SmartConstructorMode
+  smartConstructorMode: SmartConstructorMode,
+  combineErrors: ErrorCombination,
+  effectFailureMode: EffectFailureMode
 )
 
 object DecodedGenerateBuilder {
@@ -26,7 +28,9 @@ object DecodedGenerateBuilder {
     builderMethodName = "builder",
     generateExtraVariants = true,
     simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
-    smartConstructorMode = SmartConstructorMode.ZValidation
+    smartConstructorMode = SmartConstructorMode.ZValidation,
+    combineErrors = ErrorCombination.Union,
+    effectFailureMode = EffectFailureMode.Propagate
   )
 }
 
@@ -42,7 +46,9 @@ object GenerateBuilderAnnotationDecoder {
     "builderMethodName",
     "generateExtraVariants",
     "simpleOptionalValues",
-    "smartConstructorMode"
+    "smartConstructorMode",
+    "combineErrors",
+    "effectFailureMode"
   )
 
   def decode(arguments: Map[String, String]): Either[List[String], DecodedGenerateBuilder] = {
@@ -105,6 +111,18 @@ object GenerateBuilderAnnotationDecoder {
       default = DecodedGenerateBuilder.default.smartConstructorMode,
       key = "smartConstructorMode"
     )
+    val combineErrorsResult = parseEnum(
+      raw = arguments.get("combineErrors"),
+      allValues = ErrorCombination.all.map(v => v.value -> v).toMap,
+      default = DecodedGenerateBuilder.default.combineErrors,
+      key = "combineErrors"
+    )
+    val effectFailureModeResult = parseEnum(
+      raw = arguments.get("effectFailureMode"),
+      allValues = EffectFailureMode.all.map(v => v.value -> v).toMap,
+      default = DecodedGenerateBuilder.default.effectFailureMode,
+      key = "effectFailureMode"
+    )
     val builderMethodNameResult = parseBuilderMethodName(arguments.get("builderMethodName"))
     val generateExtraVariantsResult = parseBoolean(
       raw = arguments.get("generateExtraVariants"),
@@ -122,6 +140,8 @@ object GenerateBuilderAnnotationDecoder {
       mergeModeResult.left.toOption.toList.flatten ++
       simpleOptionalValuesResult.left.toOption.toList.flatten ++
       smartConstructorModeResult.left.toOption.toList.flatten ++
+      combineErrorsResult.left.toOption.toList.flatten ++
+      effectFailureModeResult.left.toOption.toList.flatten ++
       builderMethodNameResult.left.toOption.toList.flatten ++
       generateExtraVariantsResult.left.toOption.toList.flatten
 
@@ -140,7 +160,9 @@ object GenerateBuilderAnnotationDecoder {
           builderMethodName = builderMethodNameResult.toOption.get,
           generateExtraVariants = generateExtraVariantsResult.toOption.get,
           simpleOptionalValues = simpleOptionalValuesResult.toOption.get,
-          smartConstructorMode = smartConstructorModeResult.toOption.get
+          smartConstructorMode = smartConstructorModeResult.toOption.get,
+          combineErrors = combineErrorsResult.toOption.get,
+          effectFailureMode = effectFailureModeResult.toOption.get
         )
       )
     }

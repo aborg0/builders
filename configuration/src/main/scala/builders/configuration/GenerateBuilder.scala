@@ -53,6 +53,17 @@ enum SmartConstructorMode {
   case Direct
 }
 
+enum ErrorCombination {
+  case Union
+  case LeastUpperBound
+}
+
+enum EffectFailureMode {
+  case Propagate
+  case OrDie
+  case OrElseProvided
+}
+
 final class GenerateBuilder(
   val style: BuilderStyle = BuilderStyle.Validating,
   val primitivePolicy: PrimitivePolicy = PrimitivePolicy.PrimitiveAndWrappedIfDerivable,
@@ -64,7 +75,9 @@ final class GenerateBuilder(
   val builderMethodName: String = "builder",
   val generateExtraVariants: Boolean = true,
   val simpleOptionalValues: SimpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
-  val smartConstructorMode: SmartConstructorMode = SmartConstructorMode.ZValidation
+  val smartConstructorMode: SmartConstructorMode = SmartConstructorMode.ZValidation,
+  val combineErrors: ErrorCombination = ErrorCombination.Union,
+  val effectFailureMode: EffectFailureMode = EffectFailureMode.Propagate
 ) extends StaticAnnotation
 
 final case class GenerateBuilderOptions(
@@ -78,7 +91,9 @@ final case class GenerateBuilderOptions(
   builderMethodName: String,
   generateExtraVariants: Boolean,
   simpleOptionalValues: SimpleOptionalValues,
-  smartConstructorMode: SmartConstructorMode
+  smartConstructorMode: SmartConstructorMode,
+  combineErrors: ErrorCombination,
+  effectFailureMode: EffectFailureMode
 )
 
 object GenerateBuilderOptions {
@@ -93,6 +108,8 @@ object GenerateBuilderOptions {
     builderMethodName = "builder",
     generateExtraVariants = true,
     simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
-    smartConstructorMode = SmartConstructorMode.ZValidation
+    smartConstructorMode = SmartConstructorMode.ZValidation,
+    combineErrors = ErrorCombination.Union,
+    effectFailureMode = EffectFailureMode.Propagate
   )
 }

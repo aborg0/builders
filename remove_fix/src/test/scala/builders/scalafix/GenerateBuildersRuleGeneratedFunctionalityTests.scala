@@ -49,9 +49,9 @@ object GenerateBuildersRuleGeneratedFunctionalityTests extends TestSuite {
         assert(rewritten.contains("object ValidatedUser"))
         assert(rewritten.contains("private val builderApi: Any = builder"))
         assert(rewritten.contains("def builder: Builder = builderState0()"))
-        assert(rewritten.contains("private type Builder = api.ValidatedBuilderSelectable[ValidatedUser, ?, (id: Int, code: String)]"))
-        assert(rewritten.contains("private type AfterStep1 = api.ValidatedBuilderSelectable[ValidatedUser, ?, (code: CodeInput)]"))
-        assert(rewritten.contains("Tuple1((idValue: IdInput) => builderState1(idValue).asInstanceOf[Any])"))
+        assert(rewritten.contains("type Builder = (id: IdInput => AfterStep1)"))
+        assert(rewritten.contains("private type AfterStep1 = (code: CodeInput => AfterStep2)"))
+        assert(rewritten.contains("(id = (idValue: IdInput) => builderState1(idValue))"))
         assert(rewritten.contains("validateId(idValue)"))
         assert(rewritten.contains("validateCode(codeValue)"))
       } finally {
@@ -73,13 +73,14 @@ object GenerateBuildersRuleGeneratedFunctionalityTests extends TestSuite {
   }
 
   private def runSbtCommand(directory: Path, commands: List[String], extraEnv: Map[String, String] = Map.empty): CommandResult = {
-    val baseCommand = List("sbt", "--no-colors", "--batch") ++ commands
-    val command =
+    val sbtCommand =
       if (System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win")) {
-        List("cmd", "/c") ++ baseCommand
+        "sbt.bat"
       } else {
-        baseCommand
+        "sbt"
       }
+    val baseCommand = List(sbtCommand, "--no-colors", "--batch") ++ commands
+    val command = baseCommand
 
     val processBuilder = new ProcessBuilder(command: _*)
     processBuilder.directory(directory.toFile)

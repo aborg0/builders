@@ -42,6 +42,20 @@ object GenerateBuilderSchemaTests extends TestSuite {
         SimpleOptionalValues.OptionalValuesFromDefaults,
         SimpleOptionalValues.OptionalValuesWithEmptyDefaults
       ))
+      assert(SmartConstructorMode.values.toList == List(
+        SmartConstructorMode.ZValidation,
+        SmartConstructorMode.Either,
+        SmartConstructorMode.Direct
+      ))
+      assert(ErrorCombination.values.toList == List(
+        ErrorCombination.Union,
+        ErrorCombination.LeastUpperBound
+      ))
+      assert(EffectFailureMode.values.toList == List(
+        EffectFailureMode.Propagate,
+        EffectFailureMode.OrDie,
+        EffectFailureMode.OrElseProvided
+      ))
     }
 
     test("default options are stable") {
@@ -56,7 +70,9 @@ object GenerateBuilderSchemaTests extends TestSuite {
         builderMethodName = "builder",
         generateExtraVariants = true,
         simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
-        smartConstructorMode = SmartConstructorMode.ZValidation
+        smartConstructorMode = SmartConstructorMode.ZValidation,
+        combineErrors = ErrorCombination.Union,
+        effectFailureMode = EffectFailureMode.Propagate
       )
       assert(GenerateBuilderOptions.default == expected)
     }
@@ -73,6 +89,9 @@ object GenerateBuilderSchemaTests extends TestSuite {
       assert(annotation.builderMethodName == GenerateBuilderOptions.default.builderMethodName)
       assert(annotation.generateExtraVariants == GenerateBuilderOptions.default.generateExtraVariants)
       assert(annotation.simpleOptionalValues == GenerateBuilderOptions.default.simpleOptionalValues)
+      assert(annotation.smartConstructorMode == GenerateBuilderOptions.default.smartConstructorMode)
+      assert(annotation.combineErrors == GenerateBuilderOptions.default.combineErrors)
+      assert(annotation.effectFailureMode == GenerateBuilderOptions.default.effectFailureMode)
     }
   }
 }

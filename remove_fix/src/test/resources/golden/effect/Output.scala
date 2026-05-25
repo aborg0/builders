@@ -18,39 +18,21 @@ object EffectGoldenUser {
   private val style: builders.configuration.BuilderStyle = builders.configuration.BuilderStyle.Effect
   private val modeTag: String = "effect"
   private val builderApi: Any = builder
-  private class ValidatedBuilderSelectable[T, E, R <: scala.NamedTuple.AnyNamedTuple](
-  private val underlying: Tuple1[Any => Any]
-) extends Selectable {
-  type Fields = BuilderFields[R, T, E]
-  def selectDynamic(name: String): Any = underlying._1
-}
-private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.NamedTuple.AnyNamedTuple =
-  scala.NamedTuple.DropNames[R] match {
-    case Tuple1[h] =>
-      scala.NamedTuple[scala.NamedTuple.Names[R], Tuple1[h => zio.prelude.ZValidation[Nothing, E, T]]]
-    case h *: t =>
-      scala.NamedTuple[
-        Tuple1[Tuple.Head[scala.NamedTuple.Names[R]]],
-        Tuple1[h => ValidatedBuilderSelectable[T, E, scala.NamedTuple[Tuple.Tail[scala.NamedTuple.Names[R]], t]]]
-      ]
-  }
-  private type Builder = ValidatedBuilderSelectable[EffectGoldenUser, ?, (id: Int)]
+    type Builder = (id: IdInput => AfterStep1)
   def builder: Builder = builderState0()
   def builderEffect: Builder = builderState0()
   private type IdInput = Int
-  private type AfterStep1 = zio.prelude.ZValidation[Nothing, ?, EffectGoldenUser]
-  private type IdValidation = zio.prelude.ZValidation[Nothing, ?, Int]
+  private type AfterStep1 = zio.prelude.ZValidation[Nothing, Nothing, EffectGoldenUser]
+  private type IdValidation = zio.prelude.ZValidation[Nothing, Nothing, Int]
   private inline given idSmartConstructor: (IdInput => IdValidation) =
     (idValue: IdInput) => zio.prelude.ZValidation.succeed(idValue).asInstanceOf[IdValidation]
   private inline def validateId(idValue: IdInput): IdValidation =
     summon[IdInput => IdValidation].apply(idValue)
   private inline def builderState0(): Builder =
-    new ValidatedBuilderSelectable[EffectGoldenUser, Any, (id: Int)](
-      Tuple1((idValue: IdInput) => buildEffectFromValues(idValue).asInstanceOf[Any])
-    ).asInstanceOf[Builder]
+    (id = (idValue: IdInput) => buildEffectFromValues(idValue))
   private inline def builderState1(idValue: IdInput): AfterStep1 = buildEffectFromValues(idValue)
-  private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, ?, EffectGoldenUser] =
-    validateId(idValue).map(idValidated => EffectGoldenUser(idValidated))
+  private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, Nothing, EffectGoldenUser] =
+    validateId(idValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Nothing, Int]].map(idValidated => EffectGoldenUser(idValidated))
   private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.WrappedOnly
   private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.CustomPrefixOnly
   private val effectMode: builders.configuration.EffectMode = builders.configuration.EffectMode.AbstractCapability
@@ -58,5 +40,7 @@ private type BuilderFields[R <: scala.NamedTuple.AnyNamedTuple, T, E] <: scala.N
   private val staleCheckMode: builders.configuration.StaleCheckMode = builders.configuration.StaleCheckMode.StructuralOnly
   private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.ReplaceGeneratedMembers
   private val smartConstructorMode: builders.configuration.SmartConstructorMode = builders.configuration.SmartConstructorMode.ZValidation
+  private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union
+  private val effectFailureMode: builders.configuration.EffectFailureMode = builders.configuration.EffectFailureMode.Propagate
   // format: on
 }

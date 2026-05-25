@@ -105,14 +105,14 @@ case class EffectUser(id: Int)
       assert(actual.contains("private val style: builders.configuration.BuilderStyle = builders.configuration.BuilderStyle.Effect"))
       assert(actual.contains("private val modeTag: String = \"effect\""))
       assert(actual.contains("private val builderApi: Any = builder"))
-      assert(actual.contains("private type Builder = ValidatedBuilderSelectable[EffectUser, ?, (id: Int)]"))
+      assert(actual.contains("type Builder = (id: IdInput => AfterStep1)"))
       assert(actual.contains("def builder: Builder = builderState0()"))
       assert(actual.contains("def builderEffect: Builder = builderState0()"))
       assert(actual.contains("private type IdInput = Int"))
-      assert(actual.contains("private type AfterStep1 = zio.prelude.ZValidation[Nothing, ?, EffectUser]"))
+      assert(actual.contains("private type AfterStep1 = zio.prelude.ZValidation[Nothing, Nothing, EffectUser]"))
       assert(actual.contains("private inline def builderState0(): Builder ="))
-      assert(actual.contains("Tuple1((idValue: IdInput) => buildEffectFromValues(idValue).asInstanceOf[Any])"))
-      assert(actual.contains("private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, ?, EffectUser] ="))
+      assert(actual.contains("(id = (idValue: IdInput) => buildEffectFromValues(idValue))"))
+      assert(actual.contains("private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, Nothing, EffectUser] ="))
       assert(actual.contains("private inline given idSmartConstructor: (IdInput => IdValidation) ="))
       assert(actual.contains("private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.WrappedOnly"))
       assert(actual.contains("private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.CustomPrefixOnly"))
@@ -120,6 +120,8 @@ case class EffectUser(id: Int)
       assert(actual.contains("private val conversionMode: builders.configuration.ConversionMode = builders.configuration.ConversionMode.SynthesizeAndExposeHelpers"))
       assert(actual.contains("private val staleCheckMode: builders.configuration.StaleCheckMode = builders.configuration.StaleCheckMode.StructuralOnly"))
       assert(actual.contains("private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.ReplaceGeneratedMembers"))
+      assert(actual.contains("private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union"))
+      assert(actual.contains("private val effectFailureMode: builders.configuration.EffectFailureMode = builders.configuration.EffectFailureMode.Propagate"))
     }
 
     test("validating style supports custom builder method name and disabling extra variants") {
@@ -136,13 +138,13 @@ case class NamedUser(id: Int, code: String)
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
 
-      assert(actual.contains("private type Builder = ValidatedBuilderSelectable[NamedUser, ?, (id: Int, code: String)]"))
+      assert(actual.contains("type Builder = (id: IdInput => AfterStep1)"))
       assert(actual.contains("def make: Builder = builderState0()"))
       assert(!actual.contains("def makeAllow:"))
       assert(!actual.contains("def makeNoAllow:"))
       assert(!actual.contains("derivedAllow"))
       assert(!actual.contains("derivedNoAllow"))
-      assert(actual.contains("Tuple1((idValue: IdInput) => builderState1(idValue).asInstanceOf[Any])"))
+      assert(actual.contains("(id = (idValue: IdInput) => builderState1(idValue))"))
     }
 
     test("validating style emits local builder seams") {
@@ -161,6 +163,7 @@ case class SmartCtorUser(id: Int, code: String)
       assert(actual.contains("private inline given idSmartConstructor: (IdInput => IdValidation) ="))
       assert(actual.contains("private inline given codeSmartConstructor: (CodeInput => CodeValidation) ="))
       assert(!actual.contains("ValidatedBuilderGenerator.derived"))
+      assert(actual.contains("private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union"))
     }
 
     test("validating renderer emits smart constructor conversions") {

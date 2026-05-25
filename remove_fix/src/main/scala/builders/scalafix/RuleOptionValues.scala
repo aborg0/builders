@@ -81,3 +81,20 @@ object SmartConstructorMode {
 
   val all: List[SmartConstructorMode] = List(ZValidation, Either, Direct)
 }
+
+sealed abstract class ErrorCombination(val value: String)
+object ErrorCombination {
+  case object Union extends ErrorCombination("Union")
+  case object LeastUpperBound extends ErrorCombination("LeastUpperBound")
+
+  val all: List[ErrorCombination] = List(Union, LeastUpperBound)
+}
+
+sealed abstract class EffectFailureMode(val value: String)
+object EffectFailureMode {
+  case object Propagate extends EffectFailureMode("Propagate")
+  case object OrDie extends EffectFailureMode("OrDie")
+  case object OrElseProvided extends EffectFailureMode("OrElseProvided")
+
+  val all: List[EffectFailureMode] = List(Propagate, OrDie, OrElseProvided)
+}
