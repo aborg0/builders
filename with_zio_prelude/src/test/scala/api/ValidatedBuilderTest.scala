@@ -275,7 +275,7 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("builder supports trailing completion for nullable and Option fields") {
-      val result = TrailingOptionalDummy.validator.name("ok").i(2).date(null).!
+      val result = TrailingOptionalDummy.validator.name("ok").i(2).date(null).result(None)
       assert(result.isSuccess)
       val built = result.toEither.toOption.get
       assert(built.name == "ok")
@@ -305,7 +305,12 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("builder completion fills java Optional empties") {
-      val result = JavaOptionalDummy.validator.name("x").maybe("v").!
+      val result = JavaOptionalDummy.validator
+        .name("x")
+        .maybe("v")
+        .maybeInt(java.util.OptionalInt.empty())
+        .maybeLong(java.util.OptionalLong.empty())
+        .maybeDouble(java.util.OptionalDouble.empty())
       assert(result.isSuccess)
       val built = result.toEither.toOption.get
       assert(built.maybe.isPresent)
