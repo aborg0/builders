@@ -56,7 +56,7 @@ object GenerateBuildersRuleGeneratedFunctionalityTests extends TestSuite {
         assert(rewritten.contains("validateCode(codeValue)"))
         assert(rewritten.contains("object PerfValidatedUser"))
         assert(rewritten.contains("private val generatedCodeShape: builders.configuration.GeneratedCodeShape = builders.configuration.GeneratedCodeShape.Performance"))
-        assert(rewritten.contains("private inline given codeSmartConstructor: (CodeInput => CodeValidation) ="))
+        assert(rewritten.contains("private inline def validateCode(codeValue: CodeInput): CodeValidation ="))
         assert(rewritten.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
       } finally {
         deleteRecursively(tempDir)

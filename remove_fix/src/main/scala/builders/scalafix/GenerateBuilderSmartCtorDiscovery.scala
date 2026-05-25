@@ -9,9 +9,20 @@ import scala.util.Try
 import scala.util.matching.Regex
 
 object GenerateBuilderSmartCtorDiscovery {
-  final case class DiscoveredSmartCtor(methodName: String, resultKind: SmartCtorResultKind, inputTypeExpr: Option[String])
+  final case class DiscoveredSmartCtor(
+    methodName: String,
+    resultKind: SmartCtorResultKind,
+    inputTypeExpr: Option[String],
+    zioEnvironmentTypeExpr: Option[String] = None,
+    zioErrorTypeExpr: Option[String] = None
+  )
 
-  def discoverFromPath(fieldTypeExpr: String, sourceDir: Option[Path], mode: SmartConstructorMode): Option[DiscoveredSmartCtor] = {
+  def discoverFromPath(
+    fieldTypeExpr: String,
+    sourceDir: Option[Path],
+    mode: SmartConstructorMode,
+    enableEffectConstructors: Boolean = false
+  ): Option[DiscoveredSmartCtor] = {
     val normalized = fieldTypeExpr.trim
     val bareTypePattern = """^[A-Za-z_][A-Za-z0-9_\.]*$""".r
     if (bareTypePattern.findFirstIn(normalized).isEmpty) {
@@ -35,15 +46,25 @@ object GenerateBuilderSmartCtorDiscovery {
       val contents = (localCandidates ++ workspaceCandidates).distinct.flatMap { path =>
         Try(Files.readString(path)).toOption
       }
-      discoverFromContents(fieldTypeExpr, contents, mode)
+      discoverFromContents(fieldTypeExpr, contents, mode, enableEffectConstructors)
     }
   }
 
-  def discoverFromSource(fieldTypeExpr: String, source: String, mode: SmartConstructorMode): Option[DiscoveredSmartCtor] = {
-    discoverFromContents(fieldTypeExpr, List(source), mode)
+  def discoverFromSource(
+    fieldTypeExpr: String,
+    source: String,
+    mode: SmartConstructorMode,
+    enableEffectConstructors: Boolean = false
+  ): Option[DiscoveredSmartCtor] = {
+    discoverFromContents(fieldTypeExpr, List(source), mode, enableEffectConstructors)
   }
 
-  private def discoverFromContents(fieldTypeExpr: String, contents: List[String], mode: SmartConstructorMode): Option[DiscoveredSmartCtor] = {
+  private def discoverFromContents(
+    fieldTypeExpr: String,
+    contents: List[String],
+    mode: SmartConstructorMode,
+    enableEffectConstructors: Boolean
+  ): Option[DiscoveredSmartCtor] = {
     val normalized = fieldTypeExpr.trim
     val candidateNames = candidateObjectNames(normalized, contents)
 
@@ -54,11 +75,17 @@ object GenerateBuilderSmartCtorDiscovery {
           val makeRegex: Regex = ("(?s)object\\s+" + Regex.quote(candidateName) + "\\b.*?def\\s+make\\s*\\(([^)]*)\\)\\s*:\\s*([^=\\n{]+)").r
           val applyFound = applyRegex.findAllMatchIn(content).flatMap { methodMatch =>
             val inputTypeExpr = extractFirstParameterType(methodMatch.group(1).trim)
-            smartCtorResultKind(methodMatch.group(2).trim, normalized, mode).map(kind => DiscoveredSmartCtor("apply", kind, inputTypeExpr))
+            smartCtorResultKind(methodMatch.group(2).trim, normalized, mode, enableEffectConstructors).map {
+              case (kind, zioEnvTypeExpr, zioErrorTypeExpr) =>
+                DiscoveredSmartCtor("apply", kind, inputTypeExpr, zioEnvTypeExpr, zioErrorTypeExpr)
+            }
           }.toList
           val makeFound = makeRegex.findAllMatchIn(content).flatMap { methodMatch =>
             val inputTypeExpr = extractFirstParameterType(methodMatch.group(1).trim)
-            smartCtorResultKind(methodMatch.group(2).trim, normalized, mode).map(kind => DiscoveredSmartCtor("make", kind, inputTypeExpr))
+            smartCtorResultKind(methodMatch.group(2).trim, normalized, mode, enableEffectConstructors).map {
+              case (kind, zioEnvTypeExpr, zioErrorTypeExpr) =>
+                DiscoveredSmartCtor("make", kind, inputTypeExpr, zioEnvTypeExpr, zioErrorTypeExpr)
+            }
           }.toList
           val inheritedMake = inferSubtypeOrNewtypeMake(candidateName, content, mode)
           applyFound ++ makeFound ++ inheritedMake.toList
@@ -120,7 +147,12 @@ object GenerateBuilderSmartCtorDiscovery {
     normalizedFieldType.endsWith(".Type") || !normalizedFieldType.contains('.')
   }
 
-  private def smartCtorResultKind(returnType: String, normalizedFieldType: String, mode: SmartConstructorMode): Option[SmartCtorResultKind] = {
+  private def smartCtorResultKind(
+    returnType: String,
+    normalizedFieldType: String,
+    mode: SmartConstructorMode,
+    enableEffectConstructors: Boolean
+  ): Option[(SmartCtorResultKind, Option[String], Option[String])] = {
     val trimmed = returnType.replaceAll("\\s+", " ").trim
     val validationKinds = Set(
       "ZValidation[",
@@ -132,23 +164,49 @@ object GenerateBuilderSmartCtorDiscovery {
 
     val detected =
       if (validationKinds.exists(trimmed.startsWith)) {
-        Some(SmartCtorResultKind.Validation)
+        Some((SmartCtorResultKind.Validation, None, None))
       } else if (eitherKinds.exists(trimmed.startsWith)) {
-        Some(SmartCtorResultKind.EitherResult)
-      } else if (trimmed == normalizedFieldType) {
-        Some(SmartCtorResultKind.Direct)
+        Some((SmartCtorResultKind.EitherResult, None, None))
+      } else if (enableEffectConstructors) {
+        parseAdditionalEffectCtorTypes(trimmed, normalizedFieldType)
       } else {
         None
       }
 
-    detected.filter(allowedByMode(_, mode))
+    val effectDetected =
+      if (detected.isDefined) {
+        detected
+      } else {
+        parseZioEffectTypes(trimmed).flatMap {
+          case (environmentTypeExpr, errorTypeExpr, valueTypeExpr) =>
+            if (valueTypeExpr == normalizedFieldType) {
+              Some((SmartCtorResultKind.ZioResult, Some(environmentTypeExpr), Some(errorTypeExpr)))
+            } else {
+              None
+            }
+        }
+      }
+
+    val resolved = effectDetected.orElse {
+      if (trimmed == normalizedFieldType) {
+        Some((SmartCtorResultKind.Direct, None, None))
+      } else {
+        None
+      }
+    }
+    resolved.filter(entry => allowedByMode(entry._1, mode))
   }
 
   private def allowedByMode(resultKind: SmartCtorResultKind, mode: SmartConstructorMode): Boolean = mode match {
     case SmartConstructorMode.ZValidation =>
       true
     case SmartConstructorMode.Either =>
-      resultKind != SmartCtorResultKind.Validation
+      resultKind != SmartCtorResultKind.Validation &&
+      resultKind != SmartCtorResultKind.ZioResult &&
+      resultKind != SmartCtorResultKind.PromiseScalaResult &&
+      resultKind != SmartCtorResultKind.FutureJavaResult &&
+      resultKind != SmartCtorResultKind.TryResult &&
+      resultKind != SmartCtorResultKind.OptionResult
     case SmartConstructorMode.Direct =>
       resultKind == SmartCtorResultKind.Direct
   }
@@ -162,7 +220,160 @@ object GenerateBuilderSmartCtorDiscovery {
   private def resultKindPriority(resultKind: SmartCtorResultKind): Int = resultKind match {
     case SmartCtorResultKind.Validation => 0
     case SmartCtorResultKind.EitherResult => 1
-    case SmartCtorResultKind.Direct => 2
+    case SmartCtorResultKind.ZioResult => 2
+    case SmartCtorResultKind.PromiseScalaResult => 3
+    case SmartCtorResultKind.FutureJavaResult => 4
+    case SmartCtorResultKind.TryResult => 5
+    case SmartCtorResultKind.OptionResult => 6
+    case SmartCtorResultKind.Direct => 7
+  }
+
+  private def parseAdditionalEffectCtorTypes(
+    returnType: String,
+    normalizedFieldType: String
+  ): Option[(SmartCtorResultKind, Option[String], Option[String])] = {
+    if (!returnType.endsWith("]")) {
+      None
+    } else {
+      parseSimpleSingleTypeArg(returnType, List("scala.concurrent.Promise[", "Promise[")).collect {
+        case valueTypeExpr if valueTypeExpr == normalizedFieldType =>
+          (SmartCtorResultKind.PromiseScalaResult, None, None)
+      }.orElse {
+        parseSimpleSingleTypeArg(
+          returnType,
+          List(
+            "java.util.concurrent.Future[",
+            "java.util.concurrent.CompletionStage[",
+            "java.util.concurrent.CompletableFuture[",
+            "Future[",
+            "CompletionStage[",
+            "CompletableFuture["
+          )
+        ).collect {
+          case valueTypeExpr if valueTypeExpr == normalizedFieldType =>
+            (SmartCtorResultKind.FutureJavaResult, None, None)
+        }
+      }.orElse {
+        parseSimpleSingleTypeArg(returnType, List("scala.util.Try[", "Try[")).collect {
+          case valueTypeExpr if valueTypeExpr == normalizedFieldType =>
+            (SmartCtorResultKind.TryResult, None, None)
+        }
+      }.orElse {
+        parseSimpleSingleTypeArg(returnType, List("scala.Option[", "Option[")).collect {
+          case valueTypeExpr if valueTypeExpr == normalizedFieldType =>
+            (SmartCtorResultKind.OptionResult, None, None)
+        }
+      }
+    }
+  }
+
+  private def parseSimpleSingleTypeArg(returnType: String, prefixes: List[String]): Option[String] = {
+    prefixes.collectFirst {
+      case prefix if returnType.startsWith(prefix) =>
+        returnType.substring(prefix.length, returnType.length - 1)
+    }.map(_.trim).filter(_.nonEmpty)
+  }
+
+  private def parseZioEffectTypes(returnType: String): Option[(String, String, String)] = {
+    val zioPrefixes = List("zio.ZIO[", "ZIO[")
+    val ioPrefixes = List("zio.IO[", "IO[")
+    val taskPrefixes = List("zio.Task[", "Task[")
+    val uioPrefixes = List("zio.UIO[", "UIO[")
+    val rioPrefixes = List("zio.RIO[", "RIO[")
+    val urioPrefixes = List("zio.URIO[", "URIO[")
+
+    def argsAfterPrefix(prefixes: List[String], source: String): Option[List[String]] = {
+      prefixes.collectFirst {
+        case prefix if source.startsWith(prefix) =>
+          source.substring(prefix.length, source.length - 1)
+      }.flatMap(splitTypeArguments)
+    }
+
+    if (!returnType.endsWith("]")) {
+      None
+    } else {
+      argsAfterPrefix(zioPrefixes, returnType).collect {
+        case List(environmentTypeExpr, errorTypeExpr, valueTypeExpr) =>
+          (environmentTypeExpr, errorTypeExpr, valueTypeExpr)
+      }.orElse {
+        argsAfterPrefix(ioPrefixes, returnType).collect {
+          case List(errorTypeExpr, valueTypeExpr) =>
+            ("Any", errorTypeExpr, valueTypeExpr)
+        }
+      }.orElse {
+        argsAfterPrefix(taskPrefixes, returnType).collect {
+          case List(valueTypeExpr) =>
+            ("Any", "Throwable", valueTypeExpr)
+        }
+      }.orElse {
+        argsAfterPrefix(uioPrefixes, returnType).collect {
+          case List(valueTypeExpr) =>
+            ("Any", "Nothing", valueTypeExpr)
+        }
+      }.orElse {
+        argsAfterPrefix(rioPrefixes, returnType).collect {
+          case List(environmentTypeExpr, valueTypeExpr) =>
+            (environmentTypeExpr, "Throwable", valueTypeExpr)
+        }
+      }.orElse {
+        argsAfterPrefix(urioPrefixes, returnType).collect {
+          case List(environmentTypeExpr, valueTypeExpr) =>
+            (environmentTypeExpr, "Nothing", valueTypeExpr)
+        }
+      }
+    }
+  }
+
+  private def splitTypeArguments(argumentsExpr: String): Option[List[String]] = {
+    val parts = scala.collection.mutable.ListBuffer.empty[String]
+    val current = new StringBuilder
+    var depthSquare = 0
+    var depthRound = 0
+    var depthCurly = 0
+
+    argumentsExpr.foreach { ch =>
+      ch match {
+        case '[' =>
+          depthSquare += 1
+          current.append(ch)
+        case ']' =>
+          depthSquare -= 1
+          if (depthSquare < 0) {
+            return None
+          }
+          current.append(ch)
+        case '(' =>
+          depthRound += 1
+          current.append(ch)
+        case ')' =>
+          depthRound -= 1
+          if (depthRound < 0) {
+            return None
+          }
+          current.append(ch)
+        case '{' =>
+          depthCurly += 1
+          current.append(ch)
+        case '}' =>
+          depthCurly -= 1
+          if (depthCurly < 0) {
+            return None
+          }
+          current.append(ch)
+        case ',' if depthSquare == 0 && depthRound == 0 && depthCurly == 0 =>
+          parts += current.toString.trim
+          current.clear()
+        case other =>
+          current.append(other)
+      }
+    }
+
+    if (depthSquare != 0 || depthRound != 0 || depthCurly != 0) {
+      None
+    } else {
+      parts += current.toString.trim
+      Some(parts.toList.filter(_.nonEmpty))
+    }
   }
 
   private def discoverWorkspaceScalaFiles(simpleTypeName: Option[String]): List[Path] = {

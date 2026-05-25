@@ -64,6 +64,11 @@ enum EffectFailureMode {
   case OrElseProvided
 }
 
+enum EffectExecutionMode {
+  case Sequential
+  case Parallel
+}
+
 enum GeneratedCodeShape {
   case Readable
   case Performance
@@ -83,6 +88,7 @@ final class GenerateBuilder(
   val smartConstructorMode: SmartConstructorMode = SmartConstructorMode.ZValidation,
   val combineErrors: ErrorCombination = ErrorCombination.Union,
   val effectFailureMode: EffectFailureMode = EffectFailureMode.Propagate,
+  val effectExecutionMode: EffectExecutionMode = EffectExecutionMode.Sequential,
   val generatedCodeShape: GeneratedCodeShape = GeneratedCodeShape.Readable
 ) extends StaticAnnotation
 
@@ -100,6 +106,7 @@ final case class GenerateBuilderOptions(
   smartConstructorMode: SmartConstructorMode,
   combineErrors: ErrorCombination,
   effectFailureMode: EffectFailureMode,
+  effectExecutionMode: EffectExecutionMode,
   generatedCodeShape: GeneratedCodeShape
 )
 
@@ -118,6 +125,7 @@ object GenerateBuilderOptions {
     smartConstructorMode = SmartConstructorMode.ZValidation,
     combineErrors = ErrorCombination.Union,
     effectFailureMode = EffectFailureMode.Propagate,
+    effectExecutionMode = EffectExecutionMode.Sequential,
     generatedCodeShape = GeneratedCodeShape.Readable
   )
 }

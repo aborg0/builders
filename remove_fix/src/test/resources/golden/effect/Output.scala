@@ -22,19 +22,17 @@ object EffectGoldenUser {
   def builder: Builder = builderState0()
   def builderEffect: Builder = builderState0()
   private type IdInput = Int
-  private type AfterStep1 = zio.prelude.ZValidation[Nothing, Nothing, EffectGoldenUser]
-  private type IdValidation = zio.prelude.ZValidation[Nothing, Nothing, Int]
-  private given idSmartConstructor: (IdInput => IdValidation) =
-    new ((IdInput => IdValidation)) {
-      def apply(idValue: IdInput): IdValidation = zio.prelude.ZValidation.succeed(idValue)
-    }
+  private type AfterStep1 = zio.ZIO[Any, Nothing, EffectGoldenUser]
+  private type IdValidation = zio.ZIO[Any, Nothing, Int]
   private inline def validateId(idValue: IdInput): IdValidation =
-    summon[IdInput => IdValidation].apply(idValue)
+    zio.ZIO.succeed(idValue)
   private inline def builderState0(): Builder =
     (id = (idValue: IdInput) => buildEffectFromValues(idValue))
   private inline def builderState1(idValue: IdInput): AfterStep1 = buildEffectFromValues(idValue)
-  private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, Nothing, EffectGoldenUser] =
-    validateId(idValue).map(idValidated => EffectGoldenUser(idValidated))
+  private def buildEffectFromValues(idValue: IdInput): zio.ZIO[Any, Nothing, EffectGoldenUser] =
+    for {
+      idValidated <- validateId(idValue)
+    } yield EffectGoldenUser(idValidated)
   private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.WrappedOnly
   private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.CustomPrefixOnly
   private val effectMode: builders.configuration.EffectMode = builders.configuration.EffectMode.AbstractCapability
@@ -44,6 +42,7 @@ object EffectGoldenUser {
   private val smartConstructorMode: builders.configuration.SmartConstructorMode = builders.configuration.SmartConstructorMode.ZValidation
   private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union
   private val effectFailureMode: builders.configuration.EffectFailureMode = builders.configuration.EffectFailureMode.Propagate
+  private val effectExecutionMode: builders.configuration.EffectExecutionMode = builders.configuration.EffectExecutionMode.Sequential
   private val generatedCodeShape: builders.configuration.GeneratedCodeShape = builders.configuration.GeneratedCodeShape.Readable
   // format: on
 }

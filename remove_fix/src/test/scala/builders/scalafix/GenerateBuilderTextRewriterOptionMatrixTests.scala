@@ -93,6 +93,7 @@ case class DefaultsUser(mandatory: String, maybe: Option[Int] = Some(99), nullab
   primitivePolicy = PrimitivePolicy.WrappedOnly,
   pathMode = PathMode.CustomPrefixOnly,
   effectMode = EffectMode.AbstractCapability,
+  effectExecutionMode = EffectExecutionMode.Parallel,
   conversionMode = ConversionMode.SynthesizeAndExposeHelpers,
   staleCheckMode = StaleCheckMode.StructuralOnly,
   mergeMode = MergeMode.ReplaceGeneratedMembers
@@ -109,14 +110,15 @@ case class EffectUser(id: Int)
       assert(actual.contains("def builder: Builder = builderState0()"))
       assert(actual.contains("def builderEffect: Builder = builderState0()"))
       assert(actual.contains("private type IdInput = Int"))
-      assert(actual.contains("private type AfterStep1 = zio.prelude.ZValidation[Nothing, Nothing, EffectUser]"))
+      assert(actual.contains("private type AfterStep1 = zio.ZIO[Any, Nothing, EffectUser]"))
       assert(actual.contains("private inline def builderState0(): Builder ="))
       assert(actual.contains("(id = (idValue: IdInput) => buildEffectFromValues(idValue))"))
-      assert(actual.contains("private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, Nothing, EffectUser] ="))
-      assert(actual.contains("private given idSmartConstructor: (IdInput => IdValidation) ="))
+      assert(actual.contains("private def buildEffectFromValues(idValue: IdInput): zio.ZIO[Any, Nothing, EffectUser] ="))
+      assert(actual.contains("private inline def validateId(idValue: IdInput): IdValidation ="))
       assert(actual.contains("private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.WrappedOnly"))
       assert(actual.contains("private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.CustomPrefixOnly"))
       assert(actual.contains("private val effectMode: builders.configuration.EffectMode = builders.configuration.EffectMode.AbstractCapability"))
+      assert(actual.contains("private val effectExecutionMode: builders.configuration.EffectExecutionMode = builders.configuration.EffectExecutionMode.Parallel"))
       assert(actual.contains("private val conversionMode: builders.configuration.ConversionMode = builders.configuration.ConversionMode.SynthesizeAndExposeHelpers"))
       assert(actual.contains("private val staleCheckMode: builders.configuration.StaleCheckMode = builders.configuration.StaleCheckMode.StructuralOnly"))
       assert(actual.contains("private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.ReplaceGeneratedMembers"))
@@ -160,8 +162,8 @@ case class SmartCtorUser(id: Int, code: String)
       assert(actual.contains("def builder: Builder = builderState0()"))
       assert(actual.contains("def builderAllow: Builder = builderState0()"))
       assert(actual.contains("def builderNoAllow: Builder = builderState0()"))
-      assert(actual.contains("private given idSmartConstructor: (IdInput => IdValidation) ="))
-      assert(actual.contains("private given codeSmartConstructor: (CodeInput => CodeValidation) ="))
+      assert(actual.contains("private inline def validateId(idValue: IdInput): IdValidation ="))
+      assert(actual.contains("private inline def validateCode(codeValue: CodeInput): CodeValidation ="))
       assert(!actual.contains("ValidatedBuilderGenerator.derived"))
       assert(actual.contains("private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union"))
       assert(!actual.contains("validateId(idValue).mapError(error => error: Any)"))
@@ -265,7 +267,7 @@ case class PerfUser(code: OpaqueCode)
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
 
-      assert(actual.contains("private inline given codeSmartConstructor: (CodeInput => CodeValidation) ="))
+      assert(actual.contains("private inline def validateCode(codeValue: CodeInput): CodeValidation ="))
       assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
       assert(actual.contains("private val generatedCodeShape: builders.configuration.GeneratedCodeShape = builders.configuration.GeneratedCodeShape.Performance"))
     }
@@ -284,6 +286,137 @@ object ExistingCompanionUser {
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
       assert(actual == input)
+    }
+
+    test("effect style supports ZIO smart constructors and infers environment in parallel mode") {
+      val input =
+        """import builders.configuration.*
+import zio.ZIO
+
+opaque type DbWrapped = String
+object DbWrapped {
+  def apply(raw: String): ZIO[DbService, String, DbWrapped] = zio.ZIO.succeed(raw: DbWrapped)
+}
+
+@GenerateBuilder(style = BuilderStyle.Effect, effectExecutionMode = EffectExecutionMode.Parallel)
+case class EffectEnvUser(db: DbWrapped, count: Int)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("private type DbValidation = zio.ZIO[DbService, String, DbWrapped]"))
+      assert(actual.contains("private type CountValidation = zio.ZIO[Any, Nothing, Int]"))
+      assert(actual.contains("private type AfterStep2 = zio.ZIO[DbService, String, EffectEnvUser]"))
+      assert(actual.contains("private def buildEffectFromValues(dbValue: DbInput, countValue: CountInput): zio.ZIO[DbService, String, EffectEnvUser] ="))
+      assert(actual.contains("validateDb(dbValue).zipPar(validateCount(countValue)).map { case (v0, v1) => EffectEnvUser(v0, v1) }"))
+      assert(actual.contains("private val effectExecutionMode: builders.configuration.EffectExecutionMode = builders.configuration.EffectExecutionMode.Parallel"))
+    }
+
+    test("effect style combines environment and error types across multiple ZIO smart constructors") {
+      val input =
+        """import builders.configuration.*
+import zio.ZIO
+
+trait DbService
+trait AuthService
+sealed trait DbError
+sealed trait AuthError
+
+opaque type DbWrapped = String
+object DbWrapped {
+  def apply(raw: String): ZIO[DbService, DbError, DbWrapped] = zio.ZIO.succeed(raw: DbWrapped)
+}
+
+opaque type AuthWrapped = String
+object AuthWrapped {
+  def apply(raw: String): ZIO[AuthService, AuthError, AuthWrapped] = zio.ZIO.succeed(raw: AuthWrapped)
+}
+
+@GenerateBuilder(style = BuilderStyle.Effect, effectExecutionMode = EffectExecutionMode.Parallel)
+case class EffectComposedUser(db: DbWrapped, auth: AuthWrapped)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("private type DbValidation = zio.ZIO[DbService, DbError, DbWrapped]"))
+      assert(actual.contains("private type AuthValidation = zio.ZIO[AuthService, AuthError, AuthWrapped]"))
+      assert(actual.contains("private type AfterStep2 = zio.ZIO[DbService & AuthService, DbError | AuthError, EffectComposedUser]"))
+      assert(actual.contains("private def buildEffectFromValues(dbValue: DbInput, authValue: AuthInput): zio.ZIO[DbService & AuthService, DbError | AuthError, EffectComposedUser] ="))
+      assert(actual.contains("validateDb(dbValue).zipPar(validateAuth(authValue)).map { case (v0, v1) => EffectComposedUser(v0, v1) }"))
+    }
+
+    test("effect style preserves inferred environment and error types in sequential mode") {
+      val input =
+        """import builders.configuration.*
+import zio.ZIO
+
+trait DbService
+trait AuthService
+sealed trait DbError
+sealed trait AuthError
+
+opaque type DbWrapped = String
+object DbWrapped {
+  def apply(raw: String): ZIO[DbService, DbError, DbWrapped] = zio.ZIO.succeed(raw: DbWrapped)
+}
+
+opaque type AuthWrapped = String
+object AuthWrapped {
+  def apply(raw: String): ZIO[AuthService, AuthError, AuthWrapped] = zio.ZIO.succeed(raw: AuthWrapped)
+}
+
+@GenerateBuilder(style = BuilderStyle.Effect, effectExecutionMode = EffectExecutionMode.Sequential)
+case class EffectSequentialUser(db: DbWrapped, auth: AuthWrapped)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("private type AfterStep2 = zio.ZIO[DbService & AuthService, DbError | AuthError, EffectSequentialUser]"))
+      assert(actual.contains("private def buildEffectFromValues(dbValue: DbInput, authValue: AuthInput): zio.ZIO[DbService & AuthService, DbError | AuthError, EffectSequentialUser] ="))
+      assert(actual.contains("dbValidated <- validateDb(dbValue)"))
+      assert(actual.contains("authValidated <- validateAuth(authValue)"))
+      assert(actual.contains("} yield EffectSequentialUser(dbValidated, authValidated)"))
+      assert(actual.contains("private val effectExecutionMode: builders.configuration.EffectExecutionMode = builders.configuration.EffectExecutionMode.Sequential"))
+    }
+
+    test("effect style supports Promise Future Try and Option smart constructors") {
+      val input =
+        """import builders.configuration.*
+
+opaque type PromiseWrapped = String
+object PromiseWrapped {
+  def apply(raw: String): scala.concurrent.Promise[PromiseWrapped] = ???
+}
+
+opaque type FutureWrapped = String
+object FutureWrapped {
+  def apply(raw: String): java.util.concurrent.CompletableFuture[FutureWrapped] = ???
+}
+
+opaque type TryWrapped = String
+object TryWrapped {
+  def apply(raw: String): scala.util.Try[TryWrapped] = ???
+}
+
+opaque type OptionWrapped = String
+object OptionWrapped {
+  def apply(raw: String): Option[OptionWrapped] = Some(raw: OptionWrapped)
+}
+
+@GenerateBuilder(style = BuilderStyle.Effect)
+case class EffectCtorUser(promise: PromiseWrapped, future: FutureWrapped, attempt: TryWrapped, maybe: OptionWrapped)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("private type PromiseValidation = zio.ZIO[Any, Throwable, PromiseWrapped]"))
+      assert(actual.contains("private type FutureValidation = zio.ZIO[Any, Throwable, FutureWrapped]"))
+      assert(actual.contains("private type AttemptValidation = zio.ZIO[Any, Throwable, TryWrapped]"))
+      assert(actual.contains("private type MaybeValidation = zio.ZIO[Any, None.type, OptionWrapped]"))
+      assert(actual.contains("zio.ZIO.fromPromiseScala(PromiseWrapped(promiseValue))"))
+      assert(actual.contains("zio.ZIO.fromFutureJava(FutureWrapped(futureValue))"))
+      assert(actual.contains("zio.ZIO.fromTry(TryWrapped(attemptValue))"))
+      assert(actual.contains("zio.ZIO.fromOption(OptionWrapped(maybeValue))"))
     }
   }
 }

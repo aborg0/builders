@@ -4,3 +4,4 @@ There are a few things that might be configurably emitted:
  - add `@assumeSafe` annotations when the smart constructors are `@assumeSafe` or pure
  - turn `ZValidation`s, `Either`s to `ZIO`s with failure cases
  - track the paths similar to the macro implementation when the corresponding configuration is set
+ - support ZStream

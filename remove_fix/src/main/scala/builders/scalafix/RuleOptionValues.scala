@@ -99,6 +99,14 @@ object EffectFailureMode {
   val all: List[EffectFailureMode] = List(Propagate, OrDie, OrElseProvided)
 }
 
+sealed abstract class EffectExecutionMode(val value: String)
+object EffectExecutionMode {
+  case object Sequential extends EffectExecutionMode("Sequential")
+  case object Parallel extends EffectExecutionMode("Parallel")
+
+  val all: List[EffectExecutionMode] = List(Sequential, Parallel)
+}
+
 sealed abstract class GeneratedCodeShape(val value: String)
 object GeneratedCodeShape {
   case object Readable extends GeneratedCodeShape("Readable")

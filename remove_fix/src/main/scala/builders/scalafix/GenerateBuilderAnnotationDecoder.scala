@@ -14,6 +14,7 @@ final case class DecodedGenerateBuilder(
   smartConstructorMode: SmartConstructorMode,
   combineErrors: ErrorCombination,
   effectFailureMode: EffectFailureMode,
+  effectExecutionMode: EffectExecutionMode,
   generatedCodeShape: GeneratedCodeShape
 )
 
@@ -32,6 +33,7 @@ object DecodedGenerateBuilder {
     smartConstructorMode = SmartConstructorMode.ZValidation,
     combineErrors = ErrorCombination.Union,
     effectFailureMode = EffectFailureMode.Propagate,
+    effectExecutionMode = EffectExecutionMode.Sequential,
     generatedCodeShape = GeneratedCodeShape.Readable
   )
 }
@@ -51,6 +53,7 @@ object GenerateBuilderAnnotationDecoder {
     "smartConstructorMode",
     "combineErrors",
     "effectFailureMode",
+    "effectExecutionMode",
     "generatedCodeShape"
   )
 
@@ -126,6 +129,12 @@ object GenerateBuilderAnnotationDecoder {
       default = DecodedGenerateBuilder.default.effectFailureMode,
       key = "effectFailureMode"
     )
+    val effectExecutionModeResult = parseEnum(
+      raw = arguments.get("effectExecutionMode"),
+      allValues = EffectExecutionMode.all.map(v => v.value -> v).toMap,
+      default = DecodedGenerateBuilder.default.effectExecutionMode,
+      key = "effectExecutionMode"
+    )
     val generatedCodeShapeResult = parseEnum(
       raw = arguments.get("generatedCodeShape"),
       allValues = GeneratedCodeShape.all.map(v => v.value -> v).toMap,
@@ -151,6 +160,7 @@ object GenerateBuilderAnnotationDecoder {
       smartConstructorModeResult.left.toOption.toList.flatten ++
       combineErrorsResult.left.toOption.toList.flatten ++
       effectFailureModeResult.left.toOption.toList.flatten ++
+      effectExecutionModeResult.left.toOption.toList.flatten ++
       generatedCodeShapeResult.left.toOption.toList.flatten ++
       builderMethodNameResult.left.toOption.toList.flatten ++
       generateExtraVariantsResult.left.toOption.toList.flatten
@@ -173,6 +183,7 @@ object GenerateBuilderAnnotationDecoder {
           smartConstructorMode = smartConstructorModeResult.toOption.get,
           combineErrors = combineErrorsResult.toOption.get,
           effectFailureMode = effectFailureModeResult.toOption.get,
+          effectExecutionMode = effectExecutionModeResult.toOption.get,
           generatedCodeShape = generatedCodeShapeResult.toOption.get
         )
       )

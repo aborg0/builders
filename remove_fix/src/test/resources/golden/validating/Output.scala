@@ -23,19 +23,11 @@ object ValidatingUser {
   private type AfterStep1 = (code: CodeInput => AfterStep2)
   private type AfterStep2 = zio.prelude.ZValidation[Nothing, Nothing, ValidatingUser]
   private type IdValidation = zio.prelude.ZValidation[Nothing, Nothing, Int]
-  private given idSmartConstructor: (IdInput => IdValidation) =
-    new ((IdInput => IdValidation)) {
-      def apply(idValue: IdInput): IdValidation = zio.prelude.ZValidation.succeed(idValue)
-    }
   private inline def validateId(idValue: IdInput): IdValidation =
-    summon[IdInput => IdValidation].apply(idValue)
+    zio.prelude.ZValidation.succeed(idValue)
   private type CodeValidation = zio.prelude.ZValidation[Nothing, Nothing, String]
-  private given codeSmartConstructor: (CodeInput => CodeValidation) =
-    new ((CodeInput => CodeValidation)) {
-      def apply(codeValue: CodeInput): CodeValidation = zio.prelude.ZValidation.succeed(codeValue)
-    }
   private inline def validateCode(codeValue: CodeInput): CodeValidation =
-    summon[CodeInput => CodeValidation].apply(codeValue)
+    zio.prelude.ZValidation.succeed(codeValue)
   private inline def builderState0(): Builder =
     (id = (idValue: IdInput) => builderState1(idValue))
   private inline def builderState1(idValue: IdInput): AfterStep1 =

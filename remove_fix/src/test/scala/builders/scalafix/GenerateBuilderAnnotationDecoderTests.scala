@@ -71,6 +71,13 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
       }
     }
 
+    test("every EffectExecutionMode value decodes") {
+      EffectExecutionMode.all.foreach { mode =>
+        val decoded = GenerateBuilderAnnotationDecoder.decode(Map("effectExecutionMode" -> mode.value))
+        assert(decoded == Right(DecodedGenerateBuilder.default.copy(effectExecutionMode = mode)))
+      }
+    }
+
     test("every GeneratedCodeShape value decodes") {
       GeneratedCodeShape.all.foreach { shape =>
         val decoded = GenerateBuilderAnnotationDecoder.decode(Map("generatedCodeShape" -> shape.value))
@@ -93,6 +100,7 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
           "simpleOptionalValues" -> "SimpleOptionalValues.OptionalValuesWithEmptyDefaults",
           "combineErrors" -> "ErrorCombination.LeastUpperBound",
           "effectFailureMode" -> "EffectFailureMode.OrElseProvided",
+          "effectExecutionMode" -> "EffectExecutionMode.Parallel",
           "generatedCodeShape" -> "GeneratedCodeShape.Performance"
         )
       )
@@ -112,6 +120,7 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
             smartConstructorMode = SmartConstructorMode.ZValidation,
             combineErrors = ErrorCombination.LeastUpperBound,
             effectFailureMode = EffectFailureMode.OrElseProvided,
+            effectExecutionMode = EffectExecutionMode.Parallel,
             generatedCodeShape = GeneratedCodeShape.Performance
           )
         )
@@ -127,6 +136,7 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
           "simpleOptionalValues" -> "not-a-mode",
           "combineErrors" -> "not-a-combination",
           "effectFailureMode" -> "not-a-failure-mode",
+          "effectExecutionMode" -> "not-an-execution-mode",
           "generatedCodeShape" -> "not-a-shape",
           "unknownOption" -> "42"
         )
@@ -140,6 +150,7 @@ object GenerateBuilderAnnotationDecoderTests extends TestSuite {
       assert(errors.exists(_.contains("Invalid value 'not-a-mode' for simpleOptionalValues")))
       assert(errors.exists(_.contains("Invalid value 'not-a-combination' for combineErrors")))
       assert(errors.exists(_.contains("Invalid value 'not-a-failure-mode' for effectFailureMode")))
+      assert(errors.exists(_.contains("Invalid value 'not-an-execution-mode' for effectExecutionMode")))
       assert(errors.exists(_.contains("Invalid value 'not-a-shape' for generatedCodeShape")))
     }
   }

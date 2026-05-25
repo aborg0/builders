@@ -69,7 +69,14 @@ Current generated companion shape (Scalafix rule):
 - Validating/effect builders are emitted as named-tuple step chains, for example `(id: IdInput => AfterStep1)`.
 - Smart-constructor givens are emitted as regular givens with explicit `apply` methods (not inline function-value aliases), to avoid Scala 3 E174 inline-given code-size warnings.
 - Error-channel widening is expressed through `mapError` in generated validation flows, reducing broad cast usage in generated code.
-- Validating/effect configuration includes `combineErrors`; effect mode additionally includes `effectFailureMode`.
+- Validating/effect configuration includes `combineErrors`; effect mode additionally includes `effectFailureMode` and `effectExecutionMode`.
+- Effect style now emits `zio.ZIO` results (not `zio.prelude.ZValidation`).
+  - Smart constructors returning `ZValidation` are converted to `ZIO`.
+  - Smart constructors returning `Either` are converted via `ZIO.fromEither`.
+  - Smart constructors returning `ZIO` are used directly.
+  - The resulting environment type is inferred from all field effects and combined as an intersection type (capturing the union of required capabilities).
+  - `effectExecutionMode = EffectExecutionMode.Sequential` composes fields in order (`flatMap` / for-comprehension style).
+  - `effectExecutionMode = EffectExecutionMode.Parallel` composes independent fields with `zipPar`.
 - Generated code shape can be configured with `generatedCodeShape`:
   - `GeneratedCodeShape.Readable` emits explicit `apply` givens and `mapError` widening.
   - `GeneratedCodeShape.Performance` emits inline function-value givens and cast-oriented widening.

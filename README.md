@@ -45,6 +45,12 @@ Notes and recent changes
   - New validating/effect options are emitted and decoded:
     - `combineErrors` controls error-channel combination strategy.
     - `effectFailureMode` controls how effect-style builders handle validation failures (`Propagate`, `OrDie`, `OrElseProvided`).
+    - `effectExecutionMode` controls effect-style composition strategy (`Sequential`, `Parallel`).
+  - Effect-style generated builders now return `zio.ZIO` (instead of `zio.prelude.ZValidation`).
+    - Smart constructors returning `ZValidation` are converted to `ZIO`.
+    - Smart constructors returning `Either` are converted via `ZIO.fromEither`.
+    - Smart constructors already returning `ZIO` are used directly.
+    - Final effect environment is inferred from required field environments (combined as an intersection type, which represents the union of required capabilities).
   - Generated code shape is configurable via `generatedCodeShape`:
     - `Readable` favors explicit `apply`-based givens and typed `mapError` widening.
     - `Performance` favors inline function-value givens and cast-based widening.

@@ -5,6 +5,11 @@ object GenerateBuilderCompanionRenderer {
   object SmartCtorResultKind {
     case object Validation extends SmartCtorResultKind
     case object EitherResult extends SmartCtorResultKind
+    case object ZioResult extends SmartCtorResultKind
+    case object PromiseScalaResult extends SmartCtorResultKind
+    case object FutureJavaResult extends SmartCtorResultKind
+    case object TryResult extends SmartCtorResultKind
+    case object OptionResult extends SmartCtorResultKind
     case object Direct extends SmartCtorResultKind
   }
 
@@ -13,6 +18,8 @@ object GenerateBuilderCompanionRenderer {
     typeExpr: String,
     smartCtorMethodName: Option[String] = None,
     smartCtorResultKind: Option[SmartCtorResultKind] = None,
+    smartCtorZioEnvironmentTypeExpr: Option[String] = None,
+    smartCtorZioErrorTypeExpr: Option[String] = None,
     smartCtorInputTypeExpr: Option[String] = None,
     defaultExpr: Option[String] = None
   )
@@ -30,6 +37,7 @@ object GenerateBuilderCompanionRenderer {
     val smartConstructorModeExpr = smartConstructorModeToExpr(options.smartConstructorMode)
     val errorCombinationExpr = errorCombinationToExpr(options.combineErrors)
     val effectFailureModeExpr = effectFailureModeToExpr(options.effectFailureMode)
+    val effectExecutionModeExpr = effectExecutionModeToExpr(options.effectExecutionMode)
     val generatedCodeShapeExpr = generatedCodeShapeToExpr(options.generatedCodeShape)
     val configurationMembers = renderConfigurationMembers(
       options.style,
@@ -42,6 +50,7 @@ object GenerateBuilderCompanionRenderer {
       smartConstructorModeExpr,
       errorCombinationExpr,
       effectFailureModeExpr,
+      effectExecutionModeExpr,
       generatedCodeShapeExpr
     )
     val builderApiExpr = builderApiExpression(className, options)
@@ -72,6 +81,7 @@ $configurationMembers
     smartConstructorModeExpr: String,
     errorCombinationExpr: String,
     effectFailureModeExpr: String,
+    effectExecutionModeExpr: String,
     generatedCodeShapeExpr: String
   ): String = {
     val base = List(
@@ -96,6 +106,7 @@ $configurationMembers
           s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr",
           s"  private val combineErrors: builders.configuration.ErrorCombination = $errorCombinationExpr",
           s"  private val effectFailureMode: builders.configuration.EffectFailureMode = $effectFailureModeExpr",
+          s"  private val effectExecutionMode: builders.configuration.EffectExecutionMode = $effectExecutionModeExpr",
           s"  private val generatedCodeShape: builders.configuration.GeneratedCodeShape = $generatedCodeShapeExpr"
         )
     }
@@ -211,6 +222,13 @@ $configurationMembers
       "builders.configuration.EffectFailureMode.OrDie"
     case EffectFailureMode.OrElseProvided =>
       "builders.configuration.EffectFailureMode.OrElseProvided"
+  }
+
+  private def effectExecutionModeToExpr(value: EffectExecutionMode): String = value match {
+    case EffectExecutionMode.Sequential =>
+      "builders.configuration.EffectExecutionMode.Sequential"
+    case EffectExecutionMode.Parallel =>
+      "builders.configuration.EffectExecutionMode.Parallel"
   }
 
   private def generatedCodeShapeToExpr(value: GeneratedCodeShape): String = value match {
@@ -723,9 +741,12 @@ $configurationMembers
     isEffect: Boolean
   ): String = {
     val combinedErrorTypeExpr = renderCombinedErrorTypeExpr(fields, options.combineErrors)
+    val combinedEnvironmentTypeExpr = renderCombinedEnvironmentTypeExpr(fields)
     val terminalType =
       if (isEffect && options.effectFailureMode != EffectFailureMode.Propagate) {
-        s"zio.ZIO[Any, Nothing, $className]"
+        s"zio.ZIO[$combinedEnvironmentTypeExpr, Nothing, $className]"
+      } else if (isEffect) {
+        s"zio.ZIO[$combinedEnvironmentTypeExpr, $combinedErrorTypeExpr, $className]"
       } else {
         s"zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, $className]"
       }
@@ -760,10 +781,12 @@ $configurationMembers
       className,
       fields,
       terminalType,
+      combinedEnvironmentTypeExpr,
       buildMethodName,
       combinedErrorTypeExpr,
       options.generatedCodeShape,
       isEffect,
+      options.effectExecutionMode,
       options.effectFailureMode,
       requiresFallback
     )
@@ -776,10 +799,12 @@ $fieldMembers"""
     className: String,
     fields: List[ClassField],
     terminalType: String,
+    combinedEnvironmentTypeExpr: String,
     buildMethodName: String,
     combinedErrorTypeExpr: String,
     generatedCodeShape: GeneratedCodeShape,
     isEffect: Boolean,
+    effectExecutionMode: EffectExecutionMode,
     effectFailureMode: EffectFailureMode,
     requiresFallback: Boolean
   ): String = {
@@ -788,16 +813,18 @@ $fieldMembers"""
       s"  private type ${capitalize(sanitized)}Input = ${renderValidatedInputTypeExpr(field)}"
     }
     val afterStepTypeAliases = renderGenericAfterStepTypeAliases(fields, terminalType)
-    val validationHelpers = renderValidationHelpers(fields, generatedCodeShape)
+    val validationHelpers = renderValidationHelpers(fields, generatedCodeShape, isEffect)
     val stateMethods = renderSelectableStateMethods(className, fields, buildMethodName, requiresFallback)
     val buildHelper = renderLocalValidationBuildHelper(
       className,
       fields,
       terminalType,
+      combinedEnvironmentTypeExpr,
       buildMethodName,
       combinedErrorTypeExpr,
       generatedCodeShape,
       isEffect,
+      effectExecutionMode,
       effectFailureMode,
       requiresFallback
     )
@@ -809,26 +836,22 @@ $fieldMembers"""
     field.smartCtorInputTypeExpr.getOrElse(field.typeExpr)
   }
 
-  private def renderValidationHelpers(fields: List[ClassField], generatedCodeShape: GeneratedCodeShape): List[String] = {
+  private def renderValidationHelpers(fields: List[ClassField], generatedCodeShape: GeneratedCodeShape, isEffect: Boolean): List[String] = {
     fields.map { field =>
       val sanitized = sanitizeFieldName(field.name)
       val capitalized = capitalize(sanitized)
-      val helperExpr = renderValidationHelperExpr(field, sanitized, capitalized, generatedCodeShape)
+      val helperExpr = renderValidationHelperExpr(field, sanitized, capitalized, generatedCodeShape, isEffect)
       val validationErrorTypeExpr = renderFieldErrorTypeExpr(field)
-      val givenDef =
-        if (generatedCodeShape == GeneratedCodeShape.Performance) {
-          s"""  private inline given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
-    (${sanitized}Value: ${capitalized}Input) => $helperExpr"""
+      val validationEnvironmentTypeExpr = renderFieldEnvironmentTypeExpr(field)
+      val helperTypeExpr =
+        if (isEffect) {
+          s"zio.ZIO[$validationEnvironmentTypeExpr, $validationErrorTypeExpr, ${field.typeExpr}]"
         } else {
-          s"""  private given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
-    new ((${capitalized}Input => ${capitalized}Validation)) {
-      def apply(${sanitized}Value: ${capitalized}Input): ${capitalized}Validation = $helperExpr
-    }"""
+          s"zio.prelude.ZValidation[Nothing, $validationErrorTypeExpr, ${field.typeExpr}]"
         }
-      s"""  private type ${capitalized}Validation = zio.prelude.ZValidation[Nothing, $validationErrorTypeExpr, ${field.typeExpr}]
-$givenDef
+      s"""  private type ${capitalized}Validation = $helperTypeExpr
   private inline def validate$capitalized(${sanitized}Value: ${capitalized}Input): ${capitalized}Validation =
-    summon[${capitalized}Input => ${capitalized}Validation].apply(${sanitized}Value)"""
+    $helperExpr"""
     }
   }
 
@@ -836,34 +859,62 @@ $givenDef
     field: ClassField,
     sanitized: String,
     capitalized: String,
-    generatedCodeShape: GeneratedCodeShape
+    generatedCodeShape: GeneratedCodeShape,
+    isEffect: Boolean
   ): String = {
     val inputValue = s"${sanitized}Value"
     (field.smartCtorMethodName, field.smartCtorResultKind) match {
       case (Some(methodName), Some(resultKind)) =>
         val invocation = renderSmartConstructorInvocation(field.typeExpr, methodName, inputValue)
-        resultKind match {
-          case SmartCtorResultKind.Validation =>
+        if (isEffect) {
+          resultKind match {
+            case SmartCtorResultKind.Validation =>
+              s"$invocation.toEither match { case Right(value) => zio.ZIO.succeed(value); case Left(error) => zio.ZIO.fail(error) }"
+            case SmartCtorResultKind.EitherResult =>
+              s"zio.ZIO.fromEither($invocation)"
+            case SmartCtorResultKind.ZioResult =>
+              invocation
+            case SmartCtorResultKind.PromiseScalaResult =>
+              s"zio.ZIO.fromPromiseScala($invocation)"
+            case SmartCtorResultKind.FutureJavaResult =>
+              s"zio.ZIO.fromFutureJava($invocation)"
+            case SmartCtorResultKind.TryResult =>
+              s"zio.ZIO.fromTry($invocation)"
+            case SmartCtorResultKind.OptionResult =>
+              s"zio.ZIO.fromOption($invocation)"
+            case SmartCtorResultKind.Direct =>
+              s"zio.ZIO.succeed($invocation)"
+          }
+        } else {
+          resultKind match {
+            case SmartCtorResultKind.Validation =>
             if (generatedCodeShape == GeneratedCodeShape.Performance) {
               s"$invocation.asInstanceOf[${capitalized}Validation]"
             } else {
               s"$invocation.mapError(error => error: ${renderFieldErrorTypeExpr(field)})"
             }
-          case SmartCtorResultKind.EitherResult =>
+            case SmartCtorResultKind.EitherResult =>
             if (generatedCodeShape == GeneratedCodeShape.Performance) {
               s"zio.prelude.ZValidation.fromEither($invocation).asInstanceOf[${capitalized}Validation]"
             } else {
               s"zio.prelude.ZValidation.fromEither($invocation).mapError(error => error: ${renderFieldErrorTypeExpr(field)})"
             }
-          case SmartCtorResultKind.Direct =>
+            case SmartCtorResultKind.ZioResult =>
+              s"$invocation.toEither match { case Right(value) => zio.prelude.ZValidation.succeed(value); case Left(error) => zio.prelude.ZValidation.fail(error) }"
+            case SmartCtorResultKind.PromiseScalaResult | SmartCtorResultKind.FutureJavaResult | SmartCtorResultKind.TryResult | SmartCtorResultKind.OptionResult =>
+              s"zio.prelude.ZValidation.succeed($invocation).asInstanceOf[${capitalized}Validation]"
+            case SmartCtorResultKind.Direct =>
             if (generatedCodeShape == GeneratedCodeShape.Performance) {
               s"zio.prelude.ZValidation.succeed($invocation).asInstanceOf[${capitalized}Validation]"
             } else {
               s"zio.prelude.ZValidation.succeed($invocation)"
             }
+          }
         }
       case _ =>
-        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+        if (isEffect) {
+          s"zio.ZIO.succeed($inputValue)"
+        } else if (generatedCodeShape == GeneratedCodeShape.Performance) {
           s"zio.prelude.ZValidation.succeed($inputValue).asInstanceOf[${capitalized}Validation]"
         } else {
           s"zio.prelude.ZValidation.succeed($inputValue)"
@@ -971,10 +1022,12 @@ $givenDef
     className: String,
     fields: List[ClassField],
     terminalType: String,
+    combinedEnvironmentTypeExpr: String,
     buildMethodName: String,
     combinedErrorTypeExpr: String,
     generatedCodeShape: GeneratedCodeShape,
     isEffect: Boolean,
+    effectExecutionMode: EffectExecutionMode,
     effectFailureMode: EffectFailureMode,
     requiresFallback: Boolean
   ): String = {
@@ -989,15 +1042,87 @@ $givenDef
       if (!isEffect || effectFailureMode == EffectFailureMode.Propagate) {
         validationExpr
       } else if (effectFailureMode == EffectFailureMode.OrDie) {
-        s"$validationExpr.toEither match { case Right(value) => zio.ZIO.succeed(value); case Left(errors) => zio.ZIO.dieMessage(errors.toString) }"
+        s"$validationExpr.orDie"
       } else {
-        s"$validationExpr.toEither match { case Right(value) => zio.ZIO.succeed(value); case Left(_) => fallback }"
+        s"$validationExpr.catchAll(_ => fallback)"
+      }
+    }
+
+    def renderSequentialEffectValidationExpr: String = {
+      val lines = fields.zipWithIndex.map {
+        case (field, index) =>
+          val sanitized = sanitizeFieldName(field.name)
+          val capitalized = capitalize(sanitized)
+          val bindingName = s"${sanitized}Validated"
+          val maybeCast =
+            if (generatedCodeShape == GeneratedCodeShape.Performance) {
+              s".asInstanceOf[zio.ZIO[$combinedEnvironmentTypeExpr, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+            } else {
+              ""
+            }
+          val effectExpr = s"validate$capitalized(${sanitized}Value)$maybeCast"
+          if (index == 0) {
+            s"      $bindingName <- $effectExpr"
+          } else {
+            s"      $bindingName <- $effectExpr"
+          }
+      }
+      val validatedParams = fields.map(field => sanitizeFieldName(field.name) + "Validated").mkString(", ")
+      (List("for {") ++ lines ++ List(s"    } yield $className($validatedParams)")).mkString("\n")
+    }
+
+    def renderParallelEffectValidationExpr: String = {
+      if (fields.size == 1) {
+        val field = fields.head
+        val sanitized = sanitizeFieldName(field.name)
+        val capitalized = capitalize(sanitized)
+        val maybeCast =
+          if (generatedCodeShape == GeneratedCodeShape.Performance) {
+            s".asInstanceOf[zio.ZIO[$combinedEnvironmentTypeExpr, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+          } else {
+            ""
+          }
+        s"validate$capitalized(${sanitized}Value)$maybeCast.map(${sanitized}Validated => $className(${sanitized}Validated))"
+      } else {
+        val effectExprs = fields.map { field =>
+          val sanitized = sanitizeFieldName(field.name)
+          val capitalized = capitalize(sanitized)
+          val maybeCast =
+            if (generatedCodeShape == GeneratedCodeShape.Performance) {
+              s".asInstanceOf[zio.ZIO[$combinedEnvironmentTypeExpr, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+            } else {
+              ""
+            }
+          s"validate$capitalized(${sanitized}Value)$maybeCast"
+        }
+        val zipped = effectExprs.tail.foldLeft(effectExprs.head) { (acc, current) =>
+          s"$acc.zipPar($current)"
+        }
+        val tuplePattern = (0 until fields.size).foldLeft("v0") { (acc, idx) =>
+          if (idx == 0) {
+            "v0"
+          } else {
+            s"($acc, v$idx)"
+          }
+        }
+        val tupleValues = fields.indices.map(index => s"v$index").mkString(", ")
+        s"$zipped.map { case $tuplePattern => $className($tupleValues) }"
+      }
+    }
+
+    def renderEffectValidationExpr: String = {
+      if (effectExecutionMode == EffectExecutionMode.Parallel) {
+        renderParallelEffectValidationExpr
+      } else {
+        renderSequentialEffectValidationExpr
       }
     }
 
     if (fields.isEmpty) {
       val validationExpr =
-        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+        if (isEffect) {
+          s"zio.ZIO.succeed($className())"
+        } else if (generatedCodeShape == GeneratedCodeShape.Performance) {
           s"zio.prelude.ZValidation.succeed($className()).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, $className]]"
         } else {
           s"zio.prelude.ZValidation.succeed($className())"
@@ -1023,7 +1148,9 @@ $givenDef
           s"validate$capitalized(${sanitized}Value).mapError(error => error: $combinedErrorTypeExpr)"
         }
       val validationExpr =
-        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+        if (isEffect) {
+          renderEffectValidationExpr
+        } else if (generatedCodeShape == GeneratedCodeShape.Performance) {
           s"validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]].map(${sanitized}Validated => $className(${sanitized}Validated))"
         } else {
           s"$readableValidationExpr.map(${sanitized}Validated => $className(${sanitized}Validated))"
@@ -1036,22 +1163,27 @@ $givenDef
         val sanitized = sanitizeFieldName(field.name)
         s"${sanitized}Value: ${capitalize(sanitized)}Input"
       }.mkString(", ")
-      val validationCalls = fields.map { field =>
-        val sanitized = sanitizeFieldName(field.name)
-        val capitalized = capitalize(sanitized)
-        val fieldErrorTypeExpr = renderFieldErrorTypeExpr(field)
-        if (generatedCodeShape == GeneratedCodeShape.Performance) {
-          s"      validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+      val validationExpr =
+        if (isEffect) {
+          renderEffectValidationExpr
         } else {
-          if (fieldErrorTypeExpr == "Nothing" || fieldErrorTypeExpr == combinedErrorTypeExpr) {
-            s"      validate$capitalized(${sanitized}Value)"
-          } else {
-            s"      validate$capitalized(${sanitized}Value).mapError(error => error: $combinedErrorTypeExpr)"
-          }
+          val validationCalls = fields.map { field =>
+            val sanitized = sanitizeFieldName(field.name)
+            val capitalized = capitalize(sanitized)
+            val fieldErrorTypeExpr = renderFieldErrorTypeExpr(field)
+            if (generatedCodeShape == GeneratedCodeShape.Performance) {
+              s"      validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+            } else {
+              if (fieldErrorTypeExpr == "Nothing" || fieldErrorTypeExpr == combinedErrorTypeExpr) {
+                s"      validate$capitalized(${sanitized}Value)"
+              } else {
+                s"      validate$capitalized(${sanitized}Value).mapError(error => error: $combinedErrorTypeExpr)"
+              }
+            }
+          }.mkString(",\n")
+          val validatedParams = fields.map(field => sanitizeFieldName(field.name) + "Validated").mkString(", ")
+          s"zio.prelude.Validation.validateWith(\n$validationCalls\n    )(($validatedParams) => $className($validatedParams))"
         }
-      }.mkString(",\n")
-      val validatedParams = fields.map(field => sanitizeFieldName(field.name) + "Validated").mkString(", ")
-      val validationExpr = s"zio.prelude.Validation.validateWith(\n$validationCalls\n    )(($validatedParams) => $className($validatedParams))"
       val finalExpr = finalizeEffect(validationExpr)
       s"""  private def $buildMethodName($parameterDecl$fallbackParamDecl): $terminalType =
     $finalExpr"""
@@ -1062,10 +1194,27 @@ $givenDef
     field.smartCtorResultKind match {
       case Some(SmartCtorResultKind.Direct) =>
         "Nothing"
+      case Some(SmartCtorResultKind.ZioResult) =>
+        field.smartCtorZioErrorTypeExpr.getOrElse("Any")
+      case Some(SmartCtorResultKind.PromiseScalaResult) | Some(SmartCtorResultKind.FutureJavaResult) | Some(SmartCtorResultKind.TryResult) =>
+        "Throwable"
+      case Some(SmartCtorResultKind.OptionResult) =>
+        "None.type"
       case Some(SmartCtorResultKind.Validation) | Some(SmartCtorResultKind.EitherResult) =>
         "Any"
       case None =>
         "Nothing"
+    }
+  }
+
+  private def renderFieldEnvironmentTypeExpr(field: ClassField): String = {
+    field.smartCtorResultKind match {
+      case Some(SmartCtorResultKind.ZioResult) =>
+        field.smartCtorZioEnvironmentTypeExpr.getOrElse("Any")
+      case Some(SmartCtorResultKind.PromiseScalaResult) | Some(SmartCtorResultKind.FutureJavaResult) | Some(SmartCtorResultKind.TryResult) | Some(SmartCtorResultKind.OptionResult) =>
+        "Any"
+      case _ =>
+        "Any"
     }
   }
 
@@ -1081,6 +1230,15 @@ $givenDef
         } else {
           nonNothing.mkString(" | ")
         }
+    }
+  }
+
+  private def renderCombinedEnvironmentTypeExpr(fields: List[ClassField]): String = {
+    val fieldEnvironmentTypes = fields.map(renderFieldEnvironmentTypeExpr).filterNot(_ == "Any").distinct
+    if (fieldEnvironmentTypes.isEmpty) {
+      "Any"
+    } else {
+      fieldEnvironmentTypes.mkString(" & ")
     }
   }
 

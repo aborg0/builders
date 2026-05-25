@@ -74,12 +74,19 @@ class GenerateBuildersRule extends SemanticRule("GenerateBuildersRule") {
       val fieldName = param.name.value
       val fieldType = param.decltpe.map(_.syntax).getOrElse("Any")
       val defaultExpr = param.default.map(_.syntax)
-      val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromPath(fieldType, sourceDir, options.smartConstructorMode)
+      val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromPath(
+        fieldType,
+        sourceDir,
+        options.smartConstructorMode,
+        enableEffectConstructors = options.style == BuilderStyle.Effect
+      )
       GenerateBuilderCompanionRenderer.ClassField(
         fieldName,
         fieldType,
         smartCtorMethodName = discoveredSmartCtor.map(_.methodName),
         smartCtorResultKind = discoveredSmartCtor.map(_.resultKind),
+        smartCtorZioEnvironmentTypeExpr = discoveredSmartCtor.flatMap(_.zioEnvironmentTypeExpr),
+        smartCtorZioErrorTypeExpr = discoveredSmartCtor.flatMap(_.zioErrorTypeExpr),
         smartCtorInputTypeExpr = discoveredSmartCtor.flatMap(_.inputTypeExpr),
         defaultExpr = defaultExpr
       )

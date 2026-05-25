@@ -129,12 +129,19 @@ object GenerateBuilderTextRewriter {
                   val typeExpr = typeAndDefault.substring(0, eqIndex).trim
                   val defaultExpr = typeAndDefault.substring(eqIndex + 1).trim
                   if (typeExpr.nonEmpty && defaultExpr.nonEmpty) {
-                    val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromSource(typeExpr, source, options.smartConstructorMode)
+                    val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromSource(
+                      typeExpr,
+                      source,
+                      options.smartConstructorMode,
+                      enableEffectConstructors = options.style == BuilderStyle.Effect
+                    )
                     Some(GenerateBuilderCompanionRenderer.ClassField(
                       fieldName,
                       typeExpr,
                       smartCtorMethodName = discoveredSmartCtor.map(_.methodName),
                       smartCtorResultKind = discoveredSmartCtor.map(_.resultKind),
+                      smartCtorZioEnvironmentTypeExpr = discoveredSmartCtor.flatMap(_.zioEnvironmentTypeExpr),
+                      smartCtorZioErrorTypeExpr = discoveredSmartCtor.flatMap(_.zioErrorTypeExpr),
                       smartCtorInputTypeExpr = discoveredSmartCtor.flatMap(_.inputTypeExpr),
                       defaultExpr = Some(defaultExpr)
                     ))
@@ -142,12 +149,19 @@ object GenerateBuilderTextRewriter {
                     None
                   }
                 case None =>
-                  val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromSource(typeAndDefault, source, options.smartConstructorMode)
+                  val discoveredSmartCtor = GenerateBuilderSmartCtorDiscovery.discoverFromSource(
+                    typeAndDefault,
+                    source,
+                    options.smartConstructorMode,
+                    enableEffectConstructors = options.style == BuilderStyle.Effect
+                  )
                   Some(GenerateBuilderCompanionRenderer.ClassField(
                     fieldName,
                     typeAndDefault,
                     smartCtorMethodName = discoveredSmartCtor.map(_.methodName),
                     smartCtorResultKind = discoveredSmartCtor.map(_.resultKind),
+                    smartCtorZioEnvironmentTypeExpr = discoveredSmartCtor.flatMap(_.zioEnvironmentTypeExpr),
+                    smartCtorZioErrorTypeExpr = discoveredSmartCtor.flatMap(_.zioErrorTypeExpr),
                     smartCtorInputTypeExpr = discoveredSmartCtor.flatMap(_.inputTypeExpr)
                   ))
               }
