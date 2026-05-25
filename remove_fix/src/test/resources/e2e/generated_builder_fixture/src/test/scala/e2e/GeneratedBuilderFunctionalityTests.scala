@@ -31,5 +31,13 @@ object GeneratedBuilderFunctionalityTests extends TestSuite {
       assert(success.isSuccess)
       assert(failure.isFailure)
     }
+
+    test("performance-shape generated companion builder works") {
+      val success = PerfValidatedUser.builder.id(1).code("ok")
+      val failure = PerfValidatedUser.builder.id(1).code("miss")
+
+      assert(success.isSuccess)
+      assert(failure.isFailure)
+    }
   }
 }

@@ -30,6 +30,7 @@ object GenerateBuilderCompanionRenderer {
     val smartConstructorModeExpr = smartConstructorModeToExpr(options.smartConstructorMode)
     val errorCombinationExpr = errorCombinationToExpr(options.combineErrors)
     val effectFailureModeExpr = effectFailureModeToExpr(options.effectFailureMode)
+    val generatedCodeShapeExpr = generatedCodeShapeToExpr(options.generatedCodeShape)
     val configurationMembers = renderConfigurationMembers(
       options.style,
       primitivePolicyExpr,
@@ -40,7 +41,8 @@ object GenerateBuilderCompanionRenderer {
       mergeModeExpr,
       smartConstructorModeExpr,
       errorCombinationExpr,
-      effectFailureModeExpr
+      effectFailureModeExpr,
+      generatedCodeShapeExpr
     )
     val builderApiExpr = builderApiExpression(className, options)
     val builderMembers = styleSpecificBuilderMembers(className, fields, options)
@@ -69,7 +71,8 @@ $configurationMembers
     mergeModeExpr: String,
     smartConstructorModeExpr: String,
     errorCombinationExpr: String,
-    effectFailureModeExpr: String
+    effectFailureModeExpr: String,
+    generatedCodeShapeExpr: String
   ): String = {
     val base = List(
       s"  private val primitivePolicy: builders.configuration.PrimitivePolicy = $primitivePolicyExpr",
@@ -85,13 +88,15 @@ $configurationMembers
       case BuilderStyle.Validating =>
         List(
           s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr",
-          s"  private val combineErrors: builders.configuration.ErrorCombination = $errorCombinationExpr"
+          s"  private val combineErrors: builders.configuration.ErrorCombination = $errorCombinationExpr",
+          s"  private val generatedCodeShape: builders.configuration.GeneratedCodeShape = $generatedCodeShapeExpr"
         )
       case BuilderStyle.Effect =>
         List(
           s"  private val smartConstructorMode: builders.configuration.SmartConstructorMode = $smartConstructorModeExpr",
           s"  private val combineErrors: builders.configuration.ErrorCombination = $errorCombinationExpr",
-          s"  private val effectFailureMode: builders.configuration.EffectFailureMode = $effectFailureModeExpr"
+          s"  private val effectFailureMode: builders.configuration.EffectFailureMode = $effectFailureModeExpr",
+          s"  private val generatedCodeShape: builders.configuration.GeneratedCodeShape = $generatedCodeShapeExpr"
         )
     }
 
@@ -206,6 +211,13 @@ $configurationMembers
       "builders.configuration.EffectFailureMode.OrDie"
     case EffectFailureMode.OrElseProvided =>
       "builders.configuration.EffectFailureMode.OrElseProvided"
+  }
+
+  private def generatedCodeShapeToExpr(value: GeneratedCodeShape): String = value match {
+    case GeneratedCodeShape.Readable =>
+      "builders.configuration.GeneratedCodeShape.Readable"
+    case GeneratedCodeShape.Performance =>
+      "builders.configuration.GeneratedCodeShape.Performance"
   }
 
   private def renderSimpleFieldMembers(className: String, fields: List[ClassField], options: DecodedGenerateBuilder): String = {
@@ -750,6 +762,7 @@ $configurationMembers
       terminalType,
       buildMethodName,
       combinedErrorTypeExpr,
+      options.generatedCodeShape,
       isEffect,
       options.effectFailureMode,
       requiresFallback
@@ -765,6 +778,7 @@ $fieldMembers"""
     terminalType: String,
     buildMethodName: String,
     combinedErrorTypeExpr: String,
+    generatedCodeShape: GeneratedCodeShape,
     isEffect: Boolean,
     effectFailureMode: EffectFailureMode,
     requiresFallback: Boolean
@@ -774,7 +788,7 @@ $fieldMembers"""
       s"  private type ${capitalize(sanitized)}Input = ${renderValidatedInputTypeExpr(field)}"
     }
     val afterStepTypeAliases = renderGenericAfterStepTypeAliases(fields, terminalType)
-    val validationHelpers = renderValidationHelpers(fields)
+    val validationHelpers = renderValidationHelpers(fields, generatedCodeShape)
     val stateMethods = renderSelectableStateMethods(className, fields, buildMethodName, requiresFallback)
     val buildHelper = renderLocalValidationBuildHelper(
       className,
@@ -782,6 +796,7 @@ $fieldMembers"""
       terminalType,
       buildMethodName,
       combinedErrorTypeExpr,
+      generatedCodeShape,
       isEffect,
       effectFailureMode,
       requiresFallback
@@ -794,35 +809,65 @@ $fieldMembers"""
     field.smartCtorInputTypeExpr.getOrElse(field.typeExpr)
   }
 
-  private def renderValidationHelpers(fields: List[ClassField]): List[String] = {
+  private def renderValidationHelpers(fields: List[ClassField], generatedCodeShape: GeneratedCodeShape): List[String] = {
     fields.map { field =>
       val sanitized = sanitizeFieldName(field.name)
       val capitalized = capitalize(sanitized)
-      val helperExpr = renderValidationHelperExpr(field, sanitized, capitalized)
+      val helperExpr = renderValidationHelperExpr(field, sanitized, capitalized, generatedCodeShape)
       val validationErrorTypeExpr = renderFieldErrorTypeExpr(field)
+      val givenDef =
+        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+          s"""  private inline given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
+    (${sanitized}Value: ${capitalized}Input) => $helperExpr"""
+        } else {
+          s"""  private given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
+    new ((${capitalized}Input => ${capitalized}Validation)) {
+      def apply(${sanitized}Value: ${capitalized}Input): ${capitalized}Validation = $helperExpr
+    }"""
+        }
       s"""  private type ${capitalized}Validation = zio.prelude.ZValidation[Nothing, $validationErrorTypeExpr, ${field.typeExpr}]
-  private inline given ${sanitized}SmartConstructor: (${capitalized}Input => ${capitalized}Validation) =
-    (${sanitized}Value: ${capitalized}Input) => $helperExpr
+$givenDef
   private inline def validate$capitalized(${sanitized}Value: ${capitalized}Input): ${capitalized}Validation =
     summon[${capitalized}Input => ${capitalized}Validation].apply(${sanitized}Value)"""
     }
   }
 
-  private def renderValidationHelperExpr(field: ClassField, sanitized: String, capitalized: String): String = {
+  private def renderValidationHelperExpr(
+    field: ClassField,
+    sanitized: String,
+    capitalized: String,
+    generatedCodeShape: GeneratedCodeShape
+  ): String = {
     val inputValue = s"${sanitized}Value"
     (field.smartCtorMethodName, field.smartCtorResultKind) match {
       case (Some(methodName), Some(resultKind)) =>
         val invocation = renderSmartConstructorInvocation(field.typeExpr, methodName, inputValue)
         resultKind match {
           case SmartCtorResultKind.Validation =>
-            s"$invocation.asInstanceOf[${capitalized}Validation]"
+            if (generatedCodeShape == GeneratedCodeShape.Performance) {
+              s"$invocation.asInstanceOf[${capitalized}Validation]"
+            } else {
+              s"$invocation.mapError(error => error: ${renderFieldErrorTypeExpr(field)})"
+            }
           case SmartCtorResultKind.EitherResult =>
-            s"zio.prelude.ZValidation.fromEither($invocation).asInstanceOf[${capitalized}Validation]"
+            if (generatedCodeShape == GeneratedCodeShape.Performance) {
+              s"zio.prelude.ZValidation.fromEither($invocation).asInstanceOf[${capitalized}Validation]"
+            } else {
+              s"zio.prelude.ZValidation.fromEither($invocation).mapError(error => error: ${renderFieldErrorTypeExpr(field)})"
+            }
           case SmartCtorResultKind.Direct =>
-            s"zio.prelude.ZValidation.succeed($invocation).asInstanceOf[${capitalized}Validation]"
+            if (generatedCodeShape == GeneratedCodeShape.Performance) {
+              s"zio.prelude.ZValidation.succeed($invocation).asInstanceOf[${capitalized}Validation]"
+            } else {
+              s"zio.prelude.ZValidation.succeed($invocation)"
+            }
         }
       case _ =>
-        s"zio.prelude.ZValidation.succeed($inputValue).asInstanceOf[${capitalized}Validation]"
+        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+          s"zio.prelude.ZValidation.succeed($inputValue).asInstanceOf[${capitalized}Validation]"
+        } else {
+          s"zio.prelude.ZValidation.succeed($inputValue)"
+        }
     }
   }
 
@@ -928,6 +973,7 @@ $fieldMembers"""
     terminalType: String,
     buildMethodName: String,
     combinedErrorTypeExpr: String,
+    generatedCodeShape: GeneratedCodeShape,
     isEffect: Boolean,
     effectFailureMode: EffectFailureMode,
     requiresFallback: Boolean
@@ -950,7 +996,12 @@ $fieldMembers"""
     }
 
     if (fields.isEmpty) {
-      val validationExpr = s"zio.prelude.ZValidation.succeed($className()).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, $className]]"
+      val validationExpr =
+        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+          s"zio.prelude.ZValidation.succeed($className()).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, $className]]"
+        } else {
+          s"zio.prelude.ZValidation.succeed($className())"
+        }
       val finalExpr = finalizeEffect(validationExpr)
       s"""  private def $buildMethodName(${
         if (requiresFallback) {
@@ -964,7 +1015,19 @@ $fieldMembers"""
       val field = fields.head
       val sanitized = sanitizeFieldName(field.name)
       val capitalized = capitalize(sanitized)
-      val validationExpr = s"validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]].map(${sanitized}Validated => $className(${sanitized}Validated))"
+      val fieldErrorTypeExpr = renderFieldErrorTypeExpr(field)
+      val readableValidationExpr =
+        if (fieldErrorTypeExpr == "Nothing" || fieldErrorTypeExpr == combinedErrorTypeExpr) {
+          s"validate$capitalized(${sanitized}Value)"
+        } else {
+          s"validate$capitalized(${sanitized}Value).mapError(error => error: $combinedErrorTypeExpr)"
+        }
+      val validationExpr =
+        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+          s"validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]].map(${sanitized}Validated => $className(${sanitized}Validated))"
+        } else {
+          s"$readableValidationExpr.map(${sanitized}Validated => $className(${sanitized}Validated))"
+        }
       val finalExpr = finalizeEffect(validationExpr)
       s"""  private def $buildMethodName(${sanitized}Value: ${capitalized}Input$fallbackParamDecl): $terminalType =
     $finalExpr"""
@@ -976,7 +1039,16 @@ $fieldMembers"""
       val validationCalls = fields.map { field =>
         val sanitized = sanitizeFieldName(field.name)
         val capitalized = capitalize(sanitized)
-        s"      validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+        val fieldErrorTypeExpr = renderFieldErrorTypeExpr(field)
+        if (generatedCodeShape == GeneratedCodeShape.Performance) {
+          s"      validate$capitalized(${sanitized}Value).asInstanceOf[zio.prelude.ZValidation[Nothing, $combinedErrorTypeExpr, ${field.typeExpr}]]"
+        } else {
+          if (fieldErrorTypeExpr == "Nothing" || fieldErrorTypeExpr == combinedErrorTypeExpr) {
+            s"      validate$capitalized(${sanitized}Value)"
+          } else {
+            s"      validate$capitalized(${sanitized}Value).mapError(error => error: $combinedErrorTypeExpr)"
+          }
+        }
       }.mkString(",\n")
       val validatedParams = fields.map(field => sanitizeFieldName(field.name) + "Validated").mkString(", ")
       val validationExpr = s"zio.prelude.Validation.validateWith(\n$validationCalls\n    )(($validatedParams) => $className($validatedParams))"

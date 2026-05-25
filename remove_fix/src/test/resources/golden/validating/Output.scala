@@ -23,13 +23,17 @@ object ValidatingUser {
   private type AfterStep1 = (code: CodeInput => AfterStep2)
   private type AfterStep2 = zio.prelude.ZValidation[Nothing, Nothing, ValidatingUser]
   private type IdValidation = zio.prelude.ZValidation[Nothing, Nothing, Int]
-  private inline given idSmartConstructor: (IdInput => IdValidation) =
-    (idValue: IdInput) => zio.prelude.ZValidation.succeed(idValue).asInstanceOf[IdValidation]
+  private given idSmartConstructor: (IdInput => IdValidation) =
+    new ((IdInput => IdValidation)) {
+      def apply(idValue: IdInput): IdValidation = zio.prelude.ZValidation.succeed(idValue)
+    }
   private inline def validateId(idValue: IdInput): IdValidation =
     summon[IdInput => IdValidation].apply(idValue)
   private type CodeValidation = zio.prelude.ZValidation[Nothing, Nothing, String]
-  private inline given codeSmartConstructor: (CodeInput => CodeValidation) =
-    (codeValue: CodeInput) => zio.prelude.ZValidation.succeed(codeValue).asInstanceOf[CodeValidation]
+  private given codeSmartConstructor: (CodeInput => CodeValidation) =
+    new ((CodeInput => CodeValidation)) {
+      def apply(codeValue: CodeInput): CodeValidation = zio.prelude.ZValidation.succeed(codeValue)
+    }
   private inline def validateCode(codeValue: CodeInput): CodeValidation =
     summon[CodeInput => CodeValidation].apply(codeValue)
   private inline def builderState0(): Builder =
@@ -39,8 +43,8 @@ object ValidatingUser {
   private inline def builderState2(idValue: IdInput, codeValue: CodeInput): AfterStep2 = buildValidationFromValues(idValue, codeValue)
   private def buildValidationFromValues(idValue: IdInput, codeValue: CodeInput): zio.prelude.ZValidation[Nothing, Nothing, ValidatingUser] =
     zio.prelude.Validation.validateWith(
-      validateId(idValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Nothing, Int]],
-      validateCode(codeValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Nothing, String]]
+      validateId(idValue),
+      validateCode(codeValue)
     )((idValidated, codeValidated) => ValidatingUser(idValidated, codeValidated))
   private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.PrimitiveAndWrappedIfDerivable
   private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.FullCollectionAware
@@ -50,5 +54,6 @@ object ValidatingUser {
   private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.GeneratedRegionOnly
   private val smartConstructorMode: builders.configuration.SmartConstructorMode = builders.configuration.SmartConstructorMode.ZValidation
   private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union
+  private val generatedCodeShape: builders.configuration.GeneratedCodeShape = builders.configuration.GeneratedCodeShape.Readable
   // format: on
 }

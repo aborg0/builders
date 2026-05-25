@@ -56,6 +56,10 @@ object GenerateBuilderSchemaTests extends TestSuite {
         EffectFailureMode.OrDie,
         EffectFailureMode.OrElseProvided
       ))
+      assert(GeneratedCodeShape.values.toList == List(
+        GeneratedCodeShape.Readable,
+        GeneratedCodeShape.Performance
+      ))
     }
 
     test("default options are stable") {
@@ -72,7 +76,8 @@ object GenerateBuilderSchemaTests extends TestSuite {
         simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
         smartConstructorMode = SmartConstructorMode.ZValidation,
         combineErrors = ErrorCombination.Union,
-        effectFailureMode = EffectFailureMode.Propagate
+        effectFailureMode = EffectFailureMode.Propagate,
+        generatedCodeShape = GeneratedCodeShape.Readable
       )
       assert(GenerateBuilderOptions.default == expected)
     }
@@ -92,6 +97,7 @@ object GenerateBuilderSchemaTests extends TestSuite {
       assert(annotation.smartConstructorMode == GenerateBuilderOptions.default.smartConstructorMode)
       assert(annotation.combineErrors == GenerateBuilderOptions.default.combineErrors)
       assert(annotation.effectFailureMode == GenerateBuilderOptions.default.effectFailureMode)
+      assert(annotation.generatedCodeShape == GenerateBuilderOptions.default.generatedCodeShape)
     }
   }
 }

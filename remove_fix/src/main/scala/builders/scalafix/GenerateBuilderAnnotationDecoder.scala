@@ -13,7 +13,8 @@ final case class DecodedGenerateBuilder(
   simpleOptionalValues: SimpleOptionalValues,
   smartConstructorMode: SmartConstructorMode,
   combineErrors: ErrorCombination,
-  effectFailureMode: EffectFailureMode
+  effectFailureMode: EffectFailureMode,
+  generatedCodeShape: GeneratedCodeShape
 )
 
 object DecodedGenerateBuilder {
@@ -30,7 +31,8 @@ object DecodedGenerateBuilder {
     simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
     smartConstructorMode = SmartConstructorMode.ZValidation,
     combineErrors = ErrorCombination.Union,
-    effectFailureMode = EffectFailureMode.Propagate
+    effectFailureMode = EffectFailureMode.Propagate,
+    generatedCodeShape = GeneratedCodeShape.Readable
   )
 }
 
@@ -48,7 +50,8 @@ object GenerateBuilderAnnotationDecoder {
     "simpleOptionalValues",
     "smartConstructorMode",
     "combineErrors",
-    "effectFailureMode"
+    "effectFailureMode",
+    "generatedCodeShape"
   )
 
   def decode(arguments: Map[String, String]): Either[List[String], DecodedGenerateBuilder] = {
@@ -123,6 +126,12 @@ object GenerateBuilderAnnotationDecoder {
       default = DecodedGenerateBuilder.default.effectFailureMode,
       key = "effectFailureMode"
     )
+    val generatedCodeShapeResult = parseEnum(
+      raw = arguments.get("generatedCodeShape"),
+      allValues = GeneratedCodeShape.all.map(v => v.value -> v).toMap,
+      default = DecodedGenerateBuilder.default.generatedCodeShape,
+      key = "generatedCodeShape"
+    )
     val builderMethodNameResult = parseBuilderMethodName(arguments.get("builderMethodName"))
     val generateExtraVariantsResult = parseBoolean(
       raw = arguments.get("generateExtraVariants"),
@@ -142,6 +151,7 @@ object GenerateBuilderAnnotationDecoder {
       smartConstructorModeResult.left.toOption.toList.flatten ++
       combineErrorsResult.left.toOption.toList.flatten ++
       effectFailureModeResult.left.toOption.toList.flatten ++
+      generatedCodeShapeResult.left.toOption.toList.flatten ++
       builderMethodNameResult.left.toOption.toList.flatten ++
       generateExtraVariantsResult.left.toOption.toList.flatten
 
@@ -162,7 +172,8 @@ object GenerateBuilderAnnotationDecoder {
           simpleOptionalValues = simpleOptionalValuesResult.toOption.get,
           smartConstructorMode = smartConstructorModeResult.toOption.get,
           combineErrors = combineErrorsResult.toOption.get,
-          effectFailureMode = effectFailureModeResult.toOption.get
+          effectFailureMode = effectFailureModeResult.toOption.get,
+          generatedCodeShape = generatedCodeShapeResult.toOption.get
         )
       )
     }

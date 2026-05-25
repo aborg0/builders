@@ -64,6 +64,11 @@ enum EffectFailureMode {
   case OrElseProvided
 }
 
+enum GeneratedCodeShape {
+  case Readable
+  case Performance
+}
+
 final class GenerateBuilder(
   val style: BuilderStyle = BuilderStyle.Validating,
   val primitivePolicy: PrimitivePolicy = PrimitivePolicy.PrimitiveAndWrappedIfDerivable,
@@ -77,7 +82,8 @@ final class GenerateBuilder(
   val simpleOptionalValues: SimpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
   val smartConstructorMode: SmartConstructorMode = SmartConstructorMode.ZValidation,
   val combineErrors: ErrorCombination = ErrorCombination.Union,
-  val effectFailureMode: EffectFailureMode = EffectFailureMode.Propagate
+  val effectFailureMode: EffectFailureMode = EffectFailureMode.Propagate,
+  val generatedCodeShape: GeneratedCodeShape = GeneratedCodeShape.Readable
 ) extends StaticAnnotation
 
 final case class GenerateBuilderOptions(
@@ -93,7 +99,8 @@ final case class GenerateBuilderOptions(
   simpleOptionalValues: SimpleOptionalValues,
   smartConstructorMode: SmartConstructorMode,
   combineErrors: ErrorCombination,
-  effectFailureMode: EffectFailureMode
+  effectFailureMode: EffectFailureMode,
+  generatedCodeShape: GeneratedCodeShape
 )
 
 object GenerateBuilderOptions {
@@ -110,6 +117,7 @@ object GenerateBuilderOptions {
     simpleOptionalValues = SimpleOptionalValues.ExplicitOptionalValues,
     smartConstructorMode = SmartConstructorMode.ZValidation,
     combineErrors = ErrorCombination.Union,
-    effectFailureMode = EffectFailureMode.Propagate
+    effectFailureMode = EffectFailureMode.Propagate,
+    generatedCodeShape = GeneratedCodeShape.Readable
   )
 }

@@ -39,6 +39,15 @@ Notes and recent changes
 - The macros now support `zio.prelude.Newtype` / `zio.prelude.Subtype` (and the `NewtypeCustom`/`SubtypeCustom` variants) in addition to `opaque type` wrappers. That means builders will discover and invoke `make`/`apply` on zio.prelude-style wrappers where appropriate.
 
 - Semantics summary (short):
+  - Generated validating/effect companions now use direct named-tuple step chains (for example `(id: IdInput => AfterStep1)`) rather than the previous `ValidatedBuilderSelectable` wrapper structure.
+  - Generated smart-constructor givens in validating/effect companions now use explicit `apply` implementations instead of inline function-value aliases. This avoids Scala 3's E174 warning about inline given aliases increasing generated code size.
+  - The renderer now prefers typed `mapError` widening over broad `asInstanceOf` casts in validating/effect paths. This keeps generated code safer and easier to reason about.
+  - New validating/effect options are emitted and decoded:
+    - `combineErrors` controls error-channel combination strategy.
+    - `effectFailureMode` controls how effect-style builders handle validation failures (`Propagate`, `OrDie`, `OrElseProvided`).
+  - Generated code shape is configurable via `generatedCodeShape`:
+    - `Readable` favors explicit `apply`-based givens and typed `mapError` widening.
+    - `Performance` favors inline function-value givens and cast-based widening.
   - `builderNoAllow` and `builderAllow` expect primitive inputs for fields that have discovered smart-constructors (they invoke the smart constructor such as `make`/`apply` to validate). In short: these builders validate primitive inputs.
   - `builderAllow` may accept already-wrapped values without re-validating only when the wrapped type has a distinct runtime representation (for example some wrapper classes/objects). For zio.prelude `Newtype`/`Subtype` (and other cases where the wrapped type is erased to the primitive at runtime) we treat them as primitives for validation purposes and do not bypass validation by passing the wrapped value.
   - Optional-like fields are supported in validated builders:

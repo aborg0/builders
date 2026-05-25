@@ -64,6 +64,16 @@ In case you depend on a type parameter in the construction, this approach requir
 
 ## Validated builders (with zio-prelude)
 
+Current generated companion shape (Scalafix rule):
+
+- Validating/effect builders are emitted as named-tuple step chains, for example `(id: IdInput => AfterStep1)`.
+- Smart-constructor givens are emitted as regular givens with explicit `apply` methods (not inline function-value aliases), to avoid Scala 3 E174 inline-given code-size warnings.
+- Error-channel widening is expressed through `mapError` in generated validation flows, reducing broad cast usage in generated code.
+- Validating/effect configuration includes `combineErrors`; effect mode additionally includes `effectFailureMode`.
+- Generated code shape can be configured with `generatedCodeShape`:
+  - `GeneratedCodeShape.Readable` emits explicit `apply` givens and `mapError` widening.
+  - `GeneratedCodeShape.Performance` emits inline function-value givens and cast-oriented widening.
+
 This project includes a macro-based validated builder that integrates with zio-prelude smart
 constructors. By default the macro keeps the original strict behaviour: builder parameters are
 the primitive (unwrapped) types and the macro calls the smart constructor to validate them.

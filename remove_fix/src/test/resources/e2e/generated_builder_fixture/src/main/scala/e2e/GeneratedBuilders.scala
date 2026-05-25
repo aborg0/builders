@@ -42,6 +42,9 @@ object PositiveInt {
 @GenerateBuilder(style = BuilderStyle.Validating)
 case class ValidatedUser(id: Int, code: String)
 
+@GenerateBuilder(style = BuilderStyle.Validating, generatedCodeShape = GeneratedCodeShape.Performance)
+case class PerfValidatedUser(id: Int, code: OpaqueCode)
+
 case class OpaqueSmartUser(id: Int, code: OpaqueCode, op: OpaqueOp)
 
 case class MakeSmartUser(amount: PositiveInt, label: String)

@@ -32,28 +32,38 @@ object VariousValid {
   private type AfterStep4 = (date: DateInput => AfterStep5)
   private type AfterStep5 = zio.prelude.ZValidation[Nothing, Any, VariousValid]
   private type SimpleValidation = zio.prelude.ZValidation[Nothing, Nothing, Simple]
-  private inline given simpleSmartConstructor: (SimpleInput => SimpleValidation) =
-    (simpleValue: SimpleInput) => zio.prelude.ZValidation.succeed(simpleValue).asInstanceOf[SimpleValidation]
+  private given simpleSmartConstructor: (SimpleInput => SimpleValidation) =
+    new ((SimpleInput => SimpleValidation)) {
+      def apply(simpleValue: SimpleInput): SimpleValidation = zio.prelude.ZValidation.succeed(simpleValue)
+    }
   private inline def validateSimple(simpleValue: SimpleInput): SimpleValidation =
     summon[SimpleInput => SimpleValidation].apply(simpleValue)
   private type GenderValidation = zio.prelude.ZValidation[Nothing, Nothing, Gender]
-  private inline given genderSmartConstructor: (GenderInput => GenderValidation) =
-    (genderValue: GenderInput) => zio.prelude.ZValidation.succeed(genderValue).asInstanceOf[GenderValidation]
+  private given genderSmartConstructor: (GenderInput => GenderValidation) =
+    new ((GenderInput => GenderValidation)) {
+      def apply(genderValue: GenderInput): GenderValidation = zio.prelude.ZValidation.succeed(genderValue)
+    }
   private inline def validateGender(genderValue: GenderInput): GenderValidation =
     summon[GenderInput => GenderValidation].apply(genderValue)
   private type RegionValidation = zio.prelude.ZValidation[Nothing, Any, Region]
-  private inline given regionSmartConstructor: (RegionInput => RegionValidation) =
-    (regionValue: RegionInput) => zio.prelude.ZValidation.fromEither(Region(regionValue)).asInstanceOf[RegionValidation]
+  private given regionSmartConstructor: (RegionInput => RegionValidation) =
+    new ((RegionInput => RegionValidation)) {
+      def apply(regionValue: RegionInput): RegionValidation = zio.prelude.ZValidation.fromEither(Region(regionValue)).mapError(error => error: Any)
+    }
   private inline def validateRegion(regionValue: RegionInput): RegionValidation =
     summon[RegionInput => RegionValidation].apply(regionValue)
   private type TagsValidation = zio.prelude.ZValidation[Nothing, Nothing, List[String]]
-  private inline given tagsSmartConstructor: (TagsInput => TagsValidation) =
-    (tagsValue: TagsInput) => zio.prelude.ZValidation.succeed(tagsValue).asInstanceOf[TagsValidation]
+  private given tagsSmartConstructor: (TagsInput => TagsValidation) =
+    new ((TagsInput => TagsValidation)) {
+      def apply(tagsValue: TagsInput): TagsValidation = zio.prelude.ZValidation.succeed(tagsValue)
+    }
   private inline def validateTags(tagsValue: TagsInput): TagsValidation =
     summon[TagsInput => TagsValidation].apply(tagsValue)
   private type DateValidation = zio.prelude.ZValidation[Nothing, Any, AcceptableDate]
-  private inline given dateSmartConstructor: (DateInput => DateValidation) =
-    (dateValue: DateInput) => zio.prelude.ZValidation.fromEither(AcceptableDate(dateValue)).asInstanceOf[DateValidation]
+  private given dateSmartConstructor: (DateInput => DateValidation) =
+    new ((DateInput => DateValidation)) {
+      def apply(dateValue: DateInput): DateValidation = zio.prelude.ZValidation.fromEither(AcceptableDate(dateValue)).mapError(error => error: Any)
+    }
   private inline def validateDate(dateValue: DateInput): DateValidation =
     summon[DateInput => DateValidation].apply(dateValue)
   private inline def builderState0(): Builder =
@@ -69,11 +79,11 @@ object VariousValid {
   private inline def builderState5(simpleValue: SimpleInput, genderValue: GenderInput, regionValue: RegionInput, tagsValue: TagsInput, dateValue: DateInput): AfterStep5 = buildValidationFromValues(simpleValue, genderValue, regionValue, tagsValue, dateValue)
   private def buildValidationFromValues(simpleValue: SimpleInput, genderValue: GenderInput, regionValue: RegionInput, tagsValue: TagsInput, dateValue: DateInput): zio.prelude.ZValidation[Nothing, Any, VariousValid] =
     zio.prelude.Validation.validateWith(
-      validateSimple(simpleValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Any, Simple]],
-      validateGender(genderValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Any, Gender]],
-      validateRegion(regionValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Any, Region]],
-      validateTags(tagsValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Any, List[String]]],
-      validateDate(dateValue).asInstanceOf[zio.prelude.ZValidation[Nothing, Any, AcceptableDate]]
+      validateSimple(simpleValue),
+      validateGender(genderValue),
+      validateRegion(regionValue),
+      validateTags(tagsValue),
+      validateDate(dateValue)
     )((simpleValidated, genderValidated, regionValidated, tagsValidated, dateValidated) => VariousValid(simpleValidated, genderValidated, regionValidated, tagsValidated, dateValidated))
   private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.PrimitiveAndWrappedIfDerivable
   private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.FullCollectionAware
@@ -83,8 +93,7 @@ object VariousValid {
   private val mergeMode: builders.configuration.MergeMode = builders.configuration.MergeMode.GeneratedRegionOnly
   private val smartConstructorMode: builders.configuration.SmartConstructorMode = builders.configuration.SmartConstructorMode.ZValidation
   private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union
+  private val generatedCodeShape: builders.configuration.GeneratedCodeShape = builders.configuration.GeneratedCodeShape.Readable
   // format: on
 }
-
-
 

@@ -113,7 +113,7 @@ case class EffectUser(id: Int)
       assert(actual.contains("private inline def builderState0(): Builder ="))
       assert(actual.contains("(id = (idValue: IdInput) => buildEffectFromValues(idValue))"))
       assert(actual.contains("private def buildEffectFromValues(idValue: IdInput): zio.prelude.ZValidation[Nothing, Nothing, EffectUser] ="))
-      assert(actual.contains("private inline given idSmartConstructor: (IdInput => IdValidation) ="))
+      assert(actual.contains("private given idSmartConstructor: (IdInput => IdValidation) ="))
       assert(actual.contains("private val primitivePolicy: builders.configuration.PrimitivePolicy = builders.configuration.PrimitivePolicy.WrappedOnly"))
       assert(actual.contains("private val pathMode: builders.configuration.PathMode = builders.configuration.PathMode.CustomPrefixOnly"))
       assert(actual.contains("private val effectMode: builders.configuration.EffectMode = builders.configuration.EffectMode.AbstractCapability"))
@@ -160,10 +160,11 @@ case class SmartCtorUser(id: Int, code: String)
       assert(actual.contains("def builder: Builder = builderState0()"))
       assert(actual.contains("def builderAllow: Builder = builderState0()"))
       assert(actual.contains("def builderNoAllow: Builder = builderState0()"))
-      assert(actual.contains("private inline given idSmartConstructor: (IdInput => IdValidation) ="))
-      assert(actual.contains("private inline given codeSmartConstructor: (CodeInput => CodeValidation) ="))
+      assert(actual.contains("private given idSmartConstructor: (IdInput => IdValidation) ="))
+      assert(actual.contains("private given codeSmartConstructor: (CodeInput => CodeValidation) ="))
       assert(!actual.contains("ValidatedBuilderGenerator.derived"))
       assert(actual.contains("private val combineErrors: builders.configuration.ErrorCombination = builders.configuration.ErrorCombination.Union"))
+      assert(!actual.contains("validateId(idValue).mapError(error => error: Any)"))
     }
 
     test("validating renderer emits smart constructor conversions") {
@@ -198,10 +199,10 @@ case class SmartCtorUser(id: Int, code: String)
         options = DecodedGenerateBuilder.default
       )
 
-      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
-      assert(actual.contains("OpaqueOp(opValue).asInstanceOf[OpValidation]"))
-      assert(actual.contains("zio.prelude.ZValidation.fromEither(PositiveInt.make(amountValue)).asInstanceOf[AmountValidation]"))
-      assert(actual.contains("zio.prelude.ZValidation.succeed(Region(regionValue)).asInstanceOf[RegionValidation]"))
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).mapError(error => error: Any)"))
+      assert(actual.contains("OpaqueOp(opValue).mapError(error => error: Any)"))
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(PositiveInt.make(amountValue)).mapError(error => error: Any)"))
+      assert(actual.contains("zio.prelude.ZValidation.succeed(Region(regionValue))"))
     }
 
     test("validating rewrite discovers smart constructors from source") {
@@ -225,8 +226,8 @@ case class SmartDiscoveredUser(code: OpaqueCode, op: OpaqueOp)
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
 
-      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
-      assert(actual.contains("OpaqueOp(opValue).asInstanceOf[OpValidation]"))
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).mapError(error => error: Any)"))
+      assert(actual.contains("OpaqueOp(opValue).mapError(error => error: Any)"))
     }
 
     test("validating rewrite discovers subtype newtype make from alias owner") {
@@ -246,7 +247,27 @@ case class SmartSubtypeUser(sequence: SequenceNumber)
 
       val actual = GenerateBuilderTextRewriter.rewrite(input)
 
-      assert(actual.contains("SequenceNumber.make(sequenceValue).asInstanceOf[SequenceValidation]"))
+      assert(actual.contains("SequenceNumber.make(sequenceValue).mapError(error => error: Any)"))
+    }
+
+    test("validating style can opt into performance code shape") {
+      val input =
+        """import builders.configuration.*
+
+opaque type OpaqueCode = String
+object OpaqueCode {
+  def apply(raw: String): Either[String, OpaqueCode] = Right(raw: OpaqueCode)
+}
+
+@GenerateBuilder(style = BuilderStyle.Validating, generatedCodeShape = GeneratedCodeShape.Performance)
+case class PerfUser(code: OpaqueCode)
+"""
+
+      val actual = GenerateBuilderTextRewriter.rewrite(input)
+
+      assert(actual.contains("private inline given codeSmartConstructor: (CodeInput => CodeValidation) ="))
+      assert(actual.contains("zio.prelude.ZValidation.fromEither(OpaqueCode(codeValue)).asInstanceOf[CodeValidation]"))
+      assert(actual.contains("private val generatedCodeShape: builders.configuration.GeneratedCodeShape = builders.configuration.GeneratedCodeShape.Performance"))
     }
 
     test("existing companion is not regenerated") {
