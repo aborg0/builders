@@ -85,6 +85,25 @@ object ValidatedBuilderTest extends TestSuite {
       assert(s.d == d)
     }
 
+    test("builderTyped provides typed staged entrypoint") {
+      val result: ZValidation[Nothing, String, Simple] =
+        ValidatedBuilderGenerator.builderTyped[Simple].i(5).s("typed").d(LocalDate.of(2026, 1, 24))
+
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.i == 5)
+      assert(built.s == "typed")
+      assert(built.d == LocalDate.of(2026, 1, 24))
+    }
+
+    test("builderNoAllowTyped preserves smart-constructor validation") {
+      val ok = ValidatedBuilderGenerator.builderNoAllowTyped[SimpleValidated].i(7).op("Op")
+      assert(ok.isSuccess)
+
+      val bad = ValidatedBuilderGenerator.builderNoAllowTyped[SimpleValidated].i(7).op("NotOp")
+      assert(bad.isFailure)
+    }
+
     test("SimpleValidated builder returns ZValidation with String error type") {
       val validator = SimpleValidated.validator
       val result: ZValidation[Nothing, String, SimpleValidated] = validator.i(123).op("NotOp")

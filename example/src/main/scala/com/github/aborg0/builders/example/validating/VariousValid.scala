@@ -32,40 +32,20 @@ object VariousValid {
   private type AfterStep4 = (date: DateInput => AfterStep5)
   private type AfterStep5 = zio.prelude.ZValidation[Nothing, Any, VariousValid]
   private type SimpleValidation = zio.prelude.ZValidation[Nothing, Nothing, Simple]
-  private given simpleSmartConstructor: (SimpleInput => SimpleValidation) =
-    new ((SimpleInput => SimpleValidation)) {
-      def apply(simpleValue: SimpleInput): SimpleValidation = zio.prelude.ZValidation.succeed(simpleValue)
-    }
   private inline def validateSimple(simpleValue: SimpleInput): SimpleValidation =
-    summon[SimpleInput => SimpleValidation].apply(simpleValue)
+    zio.prelude.ZValidation.succeed(simpleValue)
   private type GenderValidation = zio.prelude.ZValidation[Nothing, Nothing, Gender]
-  private given genderSmartConstructor: (GenderInput => GenderValidation) =
-    new ((GenderInput => GenderValidation)) {
-      def apply(genderValue: GenderInput): GenderValidation = zio.prelude.ZValidation.succeed(genderValue)
-    }
   private inline def validateGender(genderValue: GenderInput): GenderValidation =
-    summon[GenderInput => GenderValidation].apply(genderValue)
+    zio.prelude.ZValidation.succeed(genderValue)
   private type RegionValidation = zio.prelude.ZValidation[Nothing, Any, Region]
-  private given regionSmartConstructor: (RegionInput => RegionValidation) =
-    new ((RegionInput => RegionValidation)) {
-      def apply(regionValue: RegionInput): RegionValidation = zio.prelude.ZValidation.fromEither(Region(regionValue)).mapError(error => error: Any)
-    }
   private inline def validateRegion(regionValue: RegionInput): RegionValidation =
-    summon[RegionInput => RegionValidation].apply(regionValue)
+    zio.prelude.ZValidation.fromEither(Region(regionValue)).mapError(error => error: Any)
   private type TagsValidation = zio.prelude.ZValidation[Nothing, Nothing, List[String]]
-  private given tagsSmartConstructor: (TagsInput => TagsValidation) =
-    new ((TagsInput => TagsValidation)) {
-      def apply(tagsValue: TagsInput): TagsValidation = zio.prelude.ZValidation.succeed(tagsValue)
-    }
   private inline def validateTags(tagsValue: TagsInput): TagsValidation =
-    summon[TagsInput => TagsValidation].apply(tagsValue)
+    zio.prelude.ZValidation.succeed(tagsValue)
   private type DateValidation = zio.prelude.ZValidation[Nothing, Any, AcceptableDate]
-  private given dateSmartConstructor: (DateInput => DateValidation) =
-    new ((DateInput => DateValidation)) {
-      def apply(dateValue: DateInput): DateValidation = zio.prelude.ZValidation.fromEither(AcceptableDate(dateValue)).mapError(error => error: Any)
-    }
   private inline def validateDate(dateValue: DateInput): DateValidation =
-    summon[DateInput => DateValidation].apply(dateValue)
+    zio.prelude.ZValidation.fromEither(AcceptableDate(dateValue)).mapError(error => error: Any)
   private inline def builderState0(): Builder =
     (simple = (simpleValue: SimpleInput) => builderState1(simpleValue))
   private inline def builderState1(simpleValue: SimpleInput): AfterStep1 =

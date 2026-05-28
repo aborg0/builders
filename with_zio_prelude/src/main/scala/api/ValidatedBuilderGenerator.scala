@@ -12,6 +12,23 @@ trait ValidatedBuilderGenerator[T] {
   def apply(): Builder
 }
 
+trait NoAllowBuilderInstance[T] extends ValidatedBuilderGenerator[T]
+trait AllowBuilderInstance[T] extends ValidatedBuilderGenerator[T]
+
+object NoAllowBuilderInstance {
+  type Aux[T, B] = NoAllowBuilderInstance[T] { type Builder = B }
+
+  inline given [T]: NoAllowBuilderInstance[T] =
+    ${ ValidatedBuilderGenerator.noAllowBuilderInstanceImpl[T] }
+}
+
+object AllowBuilderInstance {
+  type Aux[T, B] = AllowBuilderInstance[T] { type Builder = B }
+
+  inline given [T]: AllowBuilderInstance[T] =
+    ${ ValidatedBuilderGenerator.allowBuilderInstanceImpl[T] }
+}
+
 object ValidatedBuilderGenerator {
   import scala.NamedTuple
   import scala.NamedTuple.*
@@ -120,16 +137,19 @@ object ValidatedBuilderGenerator {
     ${ derivedImplAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
 
   transparent inline def builder[T]        = ${ builderImplNoAllow[T] }
+  transparent inline def builderTyped[T]   = ${ builderImplNoAllow[T] }
   transparent inline def builder[T](pathConfig: ValidationPathConfig) =
     ${ builderImplNoAllowWithPath[T]('pathConfig) }
   transparent inline def builder[T](customPrefix: Option[String]) =
     ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderNoAllow[T] = ${ builderImplNoAllow[T] }
+  transparent inline def builderNoAllowTyped[T] = ${ builderImplNoAllow[T] }
   transparent inline def builderNoAllow[T](pathConfig: ValidationPathConfig) =
     ${ builderImplNoAllowWithPath[T]('pathConfig) }
   transparent inline def builderNoAllow[T](customPrefix: Option[String]) =
     ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderAllow[T]   = ${ builderImplAllow[T] }
+  transparent inline def builderAllowTyped[T] = ${ builderImplAllow[T] }
   transparent inline def builderAllow[T](pathConfig: ValidationPathConfig) =
     ${ builderImplAllowWithPath[T]('pathConfig) }
   transparent inline def builderAllow[T](customPrefix: Option[String]) =
@@ -146,17 +166,59 @@ object ValidatedBuilderGenerator {
   def derivedImplNoAllowWithPath[T: Type](pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] =
     derivedImpl[T](allowUnion = false, withPath = true, pathConfig)
 
+  def noAllowBuilderInstanceImpl[T: Type](using Quotes): Expr[NoAllowBuilderInstance[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = false)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = false, withPath = false, '{ ValidationPathConfig() })
+    tpe.asType match {
+      case '[t] =>
+        sel.asTerm.tpe.asType match {
+          case '[b] =>
+            '{ new NoAllowBuilderInstance[t] {
+                 type Builder = b
+                 def apply(): Builder = $sel.asInstanceOf[Builder]
+               }
+            }.asExprOf[NoAllowBuilderInstance[T]]
+          case _ => report.errorAndAbort("Cannot match Builder type")
+        }
+      case _ => report.errorAndAbort("Cannot match T")
+    }
+  }
+
+  def allowBuilderInstanceImpl[T: Type](using Quotes): Expr[AllowBuilderInstance[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = true)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+    tpe.asType match {
+      case '[t] =>
+        sel.asTerm.tpe.asType match {
+          case '[b] =>
+            '{ new AllowBuilderInstance[t] {
+                 type Builder = b
+                 def apply(): Builder = $sel.asInstanceOf[Builder]
+               }
+            }.asExprOf[AllowBuilderInstance[T]]
+          case _ => report.errorAndAbort("Cannot match Builder type")
+        }
+      case _ => report.errorAndAbort("Cannot match T")
+    }
+  }
+
   def derivedImpl[T: Type](allowUnion: Boolean, withPath: Boolean, pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] = {
     import quotes.reflect.*
     val (tpe, sym, infos, euRepr) = analyse[T](allowUnion)
     val sel = buildSel(euRepr, tpe, sym, infos, allowUnion, withPath, pathConfig)
     tpe.asType match {
       case '[t] =>
-        '{ new ValidatedBuilderGenerator[t] {
-             type Builder = AnyNamedTuple
-             def apply(): Builder = $sel.asInstanceOf[Builder]
-           }
-        }.asExprOf[ValidatedBuilderGenerator[T]]
+        sel.asTerm.tpe.asType match {
+          case '[b] =>
+            '{ new ValidatedBuilderGenerator[t] {
+                 type Builder = b
+                 def apply(): Builder = $sel.asInstanceOf[Builder]
+               }
+            }.asExprOf[ValidatedBuilderGenerator[T]]
+          case _ => report.errorAndAbort("Cannot match Builder type")
+        }
       case _ => report.errorAndAbort("Cannot match T")
     }
   }

@@ -70,6 +70,15 @@ object ValidatedBuilderAllowTests extends TestSuite {
       assert(built.maybeLong.getAsLong == 2L)
       assert(built.maybeDouble.getAsDouble == 3.0)
     }
+
+    test("builderAllowTyped provides typed staged allow entrypoint") {
+      val wrapped = Opaque.Op("Op").toOption.get
+      val typedOk = ValidatedBuilderGenerator.builderAllowTyped[models.SimpleValidated].i(1).op(wrapped)
+      assert(typedOk.isSuccess)
+
+      val typedBad = ValidatedBuilderGenerator.builderAllowTyped[models.SimpleValidated].i(1).op("NotOp")
+      assert(typedBad.isFailure)
+    }
   }
 }
 
