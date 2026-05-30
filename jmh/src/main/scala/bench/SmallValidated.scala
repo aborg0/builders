@@ -1,13 +1,12 @@
 package bench
 
+import benchmodel.BenchSmallValidated
 import playground._
 import zio.prelude.Validation
 
-final case class SmallValidated(i: Int, op: Opaque.Op, v: Opaque.ValidOp)
-
 object SmallValidatedManual {
   // Manual builder that mirrors the chained builder API used by the generated builders:
-  // manual.i(42).op("Op").v("Op") => Validation[String, SmallValidated]
+  // manual.i(42).op("Op").v("Op") => Validation[String, BenchSmallValidated]
   def apply() = new Builder()
 
   class Builder {
@@ -19,11 +18,11 @@ object SmallValidatedManual {
   }
 
   class LevelOp(i: Int, op: String) {
-    def v(v: String): Validation[String, SmallValidated] =
+    def v(v: String): Validation[String, BenchSmallValidated] =
       Validation.validateWith(
         Validation.succeed(i),
         Validation.fromEither(Opaque.Op(op)),
         Opaque.ValidOp(v)
-      )((ii, oop, vv) => SmallValidated(ii, oop, vv))
+      )((ii, oop, vv) => BenchSmallValidated(ii, oop, vv))
   }
 }

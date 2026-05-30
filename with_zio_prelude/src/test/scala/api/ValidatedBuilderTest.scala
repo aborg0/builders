@@ -1,6 +1,6 @@
 package api
 
-import models.{JavaOptionalDummy, MapContainer, NamedInner, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, SeqContainer, Simple, SimpleValidated, TrailingOptionalDummy}
+import models.{JavaOptionalDummy, MapContainer, NamedInner, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, SeqContainer, SetContainer, SetPlainContainer, Simple, SimpleValidated, TrailingOptionalDummy}
 import utest.*
 import playground.Opaque
 import zio.prelude.ZValidation
@@ -277,6 +277,35 @@ object ValidatedBuilderTest extends TestSuite {
         ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
         ValidationPathPart.Named(None),
         ValidationPathPart.Named(Some("left")),
+        ValidationPathPart.Custom("inner prefix"),
+        ValidationPathPart.Field("value")
+      ))
+      assert(first.error == "41 is not 42.")
+    }
+
+    test("Set field with plain values succeeds without runtime casts") {
+      val result: ZValidation[Nothing, Nothing, SetPlainContainer] =
+        SetPlainContainer.validator.name("outer").items(Set(1, 2, 3))
+
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.items == Set(1, 2, 3))
+    }
+
+    test("Path-aware Set field accepts pre-validated inputs and accumulates failures") {
+      val result: ZValidation[Nothing, ValidationPathError[String], SetContainer] =
+        SetContainer.validator.name("outer").items(
+          Set(NamedInner.make("alpha", 41))
+        )
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.size == 1)
+      val first = errors.head
+      assert(first.path == Seq(
+        ValidationPathPart.Field("items"),
+        ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+        ValidationPathPart.Named(None),
         ValidationPathPart.Custom("inner prefix"),
         ValidationPathPart.Field("value")
       ))
