@@ -14,6 +14,19 @@ trait ValidatedBuilderGenerator[T] {
 
 trait NoAllowBuilderInstance[T] extends ValidatedBuilderGenerator[T]
 trait AllowBuilderInstance[T] extends ValidatedBuilderGenerator[T]
+trait NoAllowErrorType[T] {
+  type E
+}
+trait AllowErrorType[T] {
+  type E
+}
+trait AllowBuilderType[T] {
+  type Builder
+}
+trait AllowNoTransparentBuilder[T] {
+  type Builder
+  def builder: Builder
+}
 
 object NoAllowBuilderInstance {
   type Aux[T, B] = NoAllowBuilderInstance[T] { type Builder = B }
@@ -27,6 +40,34 @@ object AllowBuilderInstance {
 
   inline given [T]: AllowBuilderInstance[T] =
     ${ ValidatedBuilderGenerator.allowBuilderInstanceImpl[T] }
+}
+
+object NoAllowErrorType {
+  type Aux[T, E0] = NoAllowErrorType[T] { type E = E0 }
+
+  inline given [T]: NoAllowErrorType[T] =
+    ${ ValidatedBuilderGenerator.noAllowErrorTypeImpl[T] }
+}
+
+object AllowErrorType {
+  type Aux[T, E0] = AllowErrorType[T] { type E = E0 }
+
+  inline given [T]: AllowErrorType[T] =
+    ${ ValidatedBuilderGenerator.allowErrorTypeImpl[T] }
+}
+
+object AllowBuilderType {
+  type Aux[T, B] = AllowBuilderType[T] { type Builder = B }
+
+  inline given [T]: AllowBuilderType[T] =
+    ${ ValidatedBuilderGenerator.allowBuilderTypeImpl[T] }
+}
+
+object AllowNoTransparentBuilder {
+  type Aux[T, B] = AllowNoTransparentBuilder[T] { type Builder = B }
+
+  inline given [T]: AllowNoTransparentBuilder[T] =
+    ${ ValidatedBuilderGenerator.allowNoTransparentBuilderImpl[T] }
 }
 
 object ValidatedBuilderGenerator {
@@ -118,6 +159,9 @@ object ValidatedBuilderGenerator {
   type ValidatedBuilder[T, E] = ValidatedBuilderFor[
     Tuple.Head[Split[Tup[T], 1]], Tuple.Last[Split[Tup[T], 1]], T, E]
 
+  type BuilderStep[K <: String & Singleton, In, Out] =
+    NamedTuple[Tuple1[K], Tuple1[In => Out]]
+
   // ─── Public entry points ──────────────────────────────────────────────────────
 
   inline def derived[T]: ValidatedBuilderGenerator[T]        = ${ derivedImplNoAllow[T] }
@@ -138,18 +182,36 @@ object ValidatedBuilderGenerator {
 
   transparent inline def builder[T]        = ${ builderImplNoAllow[T] }
   transparent inline def builderTyped[T]   = ${ builderImplNoAllow[T] }
+  def builderTypedNoTransparent[T](using errorType: NoAllowErrorType[T], instance: NoAllowBuilderInstance[T]): ValidatedBuilder[T, errorType.E] =
+    instance.asInstanceOf[NoAllowBuilderInstance.Aux[T, ValidatedBuilder[T, errorType.E]]].apply()
+  def builderTypedStrict[T, B](using instance: NoAllowBuilderInstance.Aux[T, B]): B =
+    instance.apply()
   transparent inline def builder[T](pathConfig: ValidationPathConfig) =
     ${ builderImplNoAllowWithPath[T]('pathConfig) }
   transparent inline def builder[T](customPrefix: Option[String]) =
     ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderNoAllow[T] = ${ builderImplNoAllow[T] }
   transparent inline def builderNoAllowTyped[T] = ${ builderImplNoAllow[T] }
+  def builderNoAllowTypedStrict[T, B](using instance: NoAllowBuilderInstance.Aux[T, B]): B =
+    instance.apply()
   transparent inline def builderNoAllow[T](pathConfig: ValidationPathConfig) =
     ${ builderImplNoAllowWithPath[T]('pathConfig) }
   transparent inline def builderNoAllow[T](customPrefix: Option[String]) =
     ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderAllow[T]   = ${ builderImplAllow[T] }
   transparent inline def builderAllowTyped[T] = ${ builderImplAllow[T] }
+  inline def builderAllowTypedNoTransparentUnion[T](using noTransparent: AllowNoTransparentBuilder[T]): noTransparent.Builder =
+    noTransparent.builder
+  def withBuilderAllowTypedNoTransparent[T, R](using noTransparent: AllowNoTransparentBuilder[T])(f: noTransparent.Builder => R): R =
+    f(noTransparent.builder)
+  def withBuilderAllowTypedNoTransparentDependent[T, R](using noTransparent: AllowNoTransparentBuilder[T])(f: (n: AllowNoTransparentBuilder[T]) ?=> n.Builder => R): R =
+    f(using noTransparent)(noTransparent.builder)
+  def builderAllowTypedNoTransparent[T](using errorType: AllowErrorType[T], instance: AllowBuilderInstance[T]): ValidatedBuilder[T, errorType.E] =
+    instance.asInstanceOf[AllowBuilderInstance.Aux[T, ValidatedBuilder[T, errorType.E]]].apply()
+  def builderAllowTypedNoTransparentUnion[T](builderType: AllowBuilderType[T])(using instance: AllowBuilderInstance[T]): builderType.Builder =
+    instance.asInstanceOf[AllowBuilderInstance.Aux[T, builderType.Builder]].apply()
+  def builderAllowTypedStrict[T, B](using instance: AllowBuilderInstance.Aux[T, B]): B =
+    instance.apply()
   transparent inline def builderAllow[T](pathConfig: ValidationPathConfig) =
     ${ builderImplAllowWithPath[T]('pathConfig) }
   transparent inline def builderAllow[T](customPrefix: Option[String]) =
@@ -182,6 +244,65 @@ object ValidatedBuilderGenerator {
           case _ => report.errorAndAbort("Cannot match Builder type")
         }
       case _ => report.errorAndAbort("Cannot match T")
+    }
+  }
+
+  def noAllowErrorTypeImpl[T: Type](using Quotes): Expr[NoAllowErrorType[T]] = {
+    import quotes.reflect.*
+    val (_, _, _, euRepr) = analyse[T](allowUnion = false)
+    euRepr.asType match {
+      case '[e] =>
+        '{
+          new NoAllowErrorType[T] {
+            type E = e
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match error type E")
+    }
+  }
+
+  def allowErrorTypeImpl[T: Type](using Quotes): Expr[AllowErrorType[T]] = {
+    import quotes.reflect.*
+    val (_, _, _, euRepr) = analyse[T](allowUnion = true)
+    euRepr.asType match {
+      case '[e] =>
+        '{
+          new AllowErrorType[T] {
+            type E = e
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match error type E")
+    }
+  }
+
+  def allowBuilderTypeImpl[T: Type](using Quotes): Expr[AllowBuilderType[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = true)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+    sel.asTerm.tpe.asType match {
+      case '[b] =>
+        '{
+          new AllowBuilderType[T] {
+            type Builder = b
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match allow builder type")
+    }
+  }
+
+  def allowNoTransparentBuilderImpl[T: Type](using Quotes): Expr[AllowNoTransparentBuilder[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = true)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+    sel.asTerm.tpe.asType match {
+      case '[b] =>
+        '{
+          new AllowNoTransparentBuilder[T] {
+            type Builder = b
+            def builder: Builder = $sel.asInstanceOf[Builder]
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match allow no-transparent builder type")
     }
   }
 
