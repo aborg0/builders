@@ -51,14 +51,17 @@ object ValidationCollectionSupport {
     withPath: Boolean,
     elemNameExtractor: Any = null    // (elem: Any) => Option[String], or null if no extraction
   ): ZValidation[Nothing, Any, Any] = {
-    val seq = input.asInstanceOf[Seq[Any]]
-    if (seq.isEmpty || !seq.head.isInstanceOf[ZValidation[?, ?, ?]]) {
-      // Pre-built Seq[B]: no element validation, succeed as-is
-      ZValidation.succeed(seq).asInstanceOf[ZValidation[Nothing, Any, Any]]
+    val iterable = input.asInstanceOf[Iterable[Any]]
+    val firstOpt = iterable.headOption
+    if (firstOpt.isEmpty || !firstOpt.get.isInstanceOf[ZValidation[?, ?, ?]]) {
+      // Pre-built collection[B]: no element validation, succeed as-is
+      ZValidation.succeed(input).asInstanceOf[ZValidation[Nothing, Any, Any]]
     } else {
-      // Pre-validated Seq[ZValidation[Nothing, E, B]]: combine with optional path enrichment
-      val zvSeq = seq.asInstanceOf[Seq[ZValidation[Nothing, Any, Any]]]
+      // Pre-validated collection[ZValidation[Nothing, E, B]]: combine with optional path enrichment
+      val zvSeq = iterable.toSeq.asInstanceOf[Seq[ZValidation[Nothing, Any, Any]]]
       combinePreValidatedSeq(zvSeq, fieldName, elemNameField, elemNameExtractor, withPath)
+        .map(values => restoreCollectionShape(input, values.asInstanceOf[Seq[Any]]))
+        .asInstanceOf[ZValidation[Nothing, Any, Any]]
     }
   }
 
@@ -189,6 +192,19 @@ object ValidationCollectionSupport {
         ValidationPathError(basePath ++ p.path, p.error).asInstanceOf[Any]
       case other =>
         ValidationPathError(basePath, other).asInstanceOf[Any]
+    }
+  }
+
+  private def restoreCollectionShape(
+    originalInput: Any,
+    values: Seq[Any]
+  ): Any = {
+    originalInput match {
+      case _: List[?] => values.toList
+      case _: Vector[?] => values.toVector
+      case _: Set[?] => values.toSet
+      case _: Seq[?] => values.toSeq
+      case _ => values
     }
   }
 

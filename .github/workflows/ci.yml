@@ -125,7 +125,7 @@ jobs:
 
       - name: Generate docs (mdoc)
         run: |
-          sbt "docs/mdoc"
+          sbt --no-colors docs/mdoc
 
       - name: Upload generated docs as artifact
         uses: actions/upload-artifact@v4
