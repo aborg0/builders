@@ -62,3 +62,15 @@ final case class MapContainer(name: String, parts: Map[String, NamedInner])
 object MapContainer {
   val validator = ValidatedBuilderGenerator.builder[MapContainer](ValidationPathConfig(customPrefix = Some("map prefix")))
 }
+
+final case class SetPlainContainer(name: String, items: Set[Int])
+
+object SetPlainContainer {
+  val validator = ValidatedBuilderGenerator.builder[SetPlainContainer]
+}
+
+final case class SetContainer(name: String, items: Set[NamedInner])
+
+object SetContainer {
+  val validator = ValidatedBuilderGenerator.builder[SetContainer](ValidationPathConfig(customPrefix = Some("set prefix")))
+}

@@ -1,6 +1,6 @@
 package api
 
-import models.{JavaOptionalDummy, MapContainer, NamedInner, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, SeqContainer, Simple, SimpleValidated, TrailingOptionalDummy}
+import models.{JavaOptionalDummy, MapContainer, NamedInner, NestedOuter, OptionalInputDummy, PathAwareDummy, PlainPathDummy, SeqContainer, SetContainer, SetPlainContainer, Simple, SimpleValidated, TrailingOptionalDummy}
 import utest.*
 import playground.Opaque
 import zio.prelude.ZValidation
@@ -83,6 +83,25 @@ object ValidatedBuilderTest extends TestSuite {
       assert(s.i == 0)
       assert(s.s == "x")
       assert(s.d == d)
+    }
+
+    test("builderTyped provides typed staged entrypoint") {
+      val result: ZValidation[Nothing, String, Simple] =
+        ValidatedBuilderGenerator.builderTyped[Simple].i(5).s("typed").d(LocalDate.of(2026, 1, 24))
+
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.i == 5)
+      assert(built.s == "typed")
+      assert(built.d == LocalDate.of(2026, 1, 24))
+    }
+
+    test("builderNoAllowTyped preserves smart-constructor validation") {
+      val ok = ValidatedBuilderGenerator.builderNoAllowTyped[SimpleValidated].i(7).op("Op")
+      assert(ok.isSuccess)
+
+      val bad = ValidatedBuilderGenerator.builderNoAllowTyped[SimpleValidated].i(7).op("NotOp")
+      assert(bad.isFailure)
     }
 
     test("SimpleValidated builder returns ZValidation with String error type") {
@@ -264,6 +283,35 @@ object ValidatedBuilderTest extends TestSuite {
       assert(first.error == "41 is not 42.")
     }
 
+    test("Set field with plain values succeeds without runtime casts") {
+      val result: ZValidation[Nothing, Nothing, SetPlainContainer] =
+        SetPlainContainer.validator.name("outer").items(Set(1, 2, 3))
+
+      assert(result.isSuccess)
+      val built = result.toEither.toOption.get
+      assert(built.items == Set(1, 2, 3))
+    }
+
+    test("Path-aware Set field accepts pre-validated inputs and accumulates failures") {
+      val result: ZValidation[Nothing, ValidationPathError[String], SetContainer] =
+        SetContainer.validator.name("outer").items(
+          Set(NamedInner.make("alpha", 41))
+        )
+
+      assert(result.isFailure)
+      val errors = result.toEither.left.toOption.get
+      assert(errors.size == 1)
+      val first = errors.head
+      assert(first.path == Seq(
+        ValidationPathPart.Field("items"),
+        ValidationPathPart.Index(ValidationPathIndex.wrap(0)),
+        ValidationPathPart.Named(None),
+        ValidationPathPart.Custom("inner prefix"),
+        ValidationPathPart.Field("value")
+      ))
+      assert(first.error == "41 is not 42.")
+    }
+
     test("builder accepts raw and None for Option fields") {
       val rawValue = OptionalInputDummy.validator.name("a").maybe(3)
       assert(rawValue.isSuccess)
@@ -275,7 +323,7 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("builder supports trailing completion for nullable and Option fields") {
-      val result = TrailingOptionalDummy.validator.name("ok").i(2).date(null).!
+      val result = TrailingOptionalDummy.validator.name("ok").i(2).date(null).result(None)
       assert(result.isSuccess)
       val built = result.toEither.toOption.get
       assert(built.name == "ok")
@@ -305,7 +353,12 @@ object ValidatedBuilderTest extends TestSuite {
     }
 
     test("builder completion fills java Optional empties") {
-      val result = JavaOptionalDummy.validator.name("x").maybe("v").!
+      val result = JavaOptionalDummy.validator
+        .name("x")
+        .maybe("v")
+        .maybeInt(java.util.OptionalInt.empty())
+        .maybeLong(java.util.OptionalLong.empty())
+        .maybeDouble(java.util.OptionalDouble.empty())
       assert(result.isSuccess)
       val built = result.toEither.toOption.get
       assert(built.maybe.isPresent)

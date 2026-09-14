@@ -33,7 +33,8 @@ jobs:
           set -o pipefail
           # Switch to the jmh subproject, compile and run a short JMH smoke benchmark.
           # Keep iterations small for CI speed: 1 warmup, 3 measurement iterations, 1 fork.
-          sbt -v "project jmh" "jmh:compile" "jmh:run -i 3 -wi 1 -f 1 bench.Bench_GeneratedValidated_vs_ManualValidated" | tee jmh-output.txt
+          # sbt 2 removed the 0.13-style "config:task" syntax; use slash syntax instead.
+          sbt -v "project jmh" "Jmh/compile" "Jmh/run -i 3 -wi 1 -f 1 bench.Bench_GeneratedValidated_vs_ManualValidated" | tee jmh-output.txt
 
       - name: Upload JMH output
         if: always()

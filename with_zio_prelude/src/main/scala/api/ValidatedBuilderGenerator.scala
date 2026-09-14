@@ -5,78 +5,69 @@ import scala.quoted.*
 import scala.NamedTuple.AnyNamedTuple
 import zio.prelude.ZValidation
 
-// ─── Top-level: outside the object so LambdaLift can always reference them ────
-
-/** Selectable wrapper exposing builder fields by name at a given remaining level. */
-class ValidatedBuilderSelectable[T, E, R <: AnyNamedTuple](
-  private[api] val underlying: Any,
-  private[api] val complete: () => Any = () => throw new UnsupportedOperationException("Cannot complete builder: required fields remain")
-) extends Selectable {
-  type Fields = ValidatedBuilderGenerator.BuilderFields[R, T, E]
-  def selectDynamic(name: String): Any = underlying.asInstanceOf[Tuple1[Any]]._1
-  def `!`(using ValidatedBuilderGenerator.CanComplete[R]): ZValidation[Nothing, E, T] =
-    complete().asInstanceOf[ZValidation[Nothing, E, T]]
-}
-
-/**
- * Runtime builder chain.  Holds:
- *  - `validators`: one `Any => ZValidation[Nothing,Any,Any]` per field
- *  - `combine`:    `Array[Any] => ZValidation[Nothing,Any,T]`
- *  - `collected`:  parameters supplied so far (one per level consumed)
- *
- * Each level is wrapped in a `Tuple1(fn)` where `fn: Any => <next level or ZValidation>`.
- * Intermediate levels produce a new `ValidatedBuilderSelectable` wrapping the next `Tuple1`.
- * The last level applies all validators and calls `combine`.
- */
-class ValidatedBuilderChain[T](
-  private val validators: Array[Any => Any],  // Any => ZValidation[Nothing, Any, Any]
-  private val combine:    Array[Any] => Any,  // Array[ZValidation] => ZValidation[Nothing, Any, T]
-  private val n:          Int,
-  private val collected:  Array[Any],         // ZValidation values collected so far
-  private val completionDefaults: Array[Option[Any]]
-) {
-  /**
-   * Returns the Tuple1(fn) for level `idx`.
-   * `fn` takes the raw field value, validates it, and either:
-   *  - wraps the next level in a `ValidatedBuilderSelectable` (intermediate), or
-   *  - calls `combine` (last level).
-   */
-  def tuple1AtLevel[R <: AnyNamedTuple](idx: Int): Tuple1[Any => Any] =
-    Tuple1 { (rawParam: Any) =>
-      val zv = validators(idx)(rawParam)                      // ZValidation[Nothing, Any, Any]
-      val newCollected = collected :+ zv
-      if (idx == n - 1) {
-        combine(newCollected)                                  // ZValidation[Nothing, Any, T]
-      } else {
-        val nextChain = new ValidatedBuilderChain[T](validators, combine, n, newCollected, completionDefaults)
-        // The R type param is erased at runtime; the compile-time Fields type is set by
-        // the macro via a Typed ascription on the ValidatedBuilderSelectable constructor call.
-        new ValidatedBuilderSelectable[T, Any, R](
-          nextChain.tuple1AtLevel[R](idx + 1),
-          () => nextChain.completeFrom(idx + 1)
-        )
-      }
-    }
-
-  def completeFrom(idx: Int): Any = {
-    var i = idx
-    var current = collected
-    while (i < n) {
-      val raw = completionDefaults(i).getOrElse {
-        throw new UnsupportedOperationException(s"Cannot complete builder from index $idx: field at index $i is required")
-      }
-      current = current :+ validators(i)(raw)
-      i += 1
-    }
-    combine(current)
-  }
-}
-
 // ─── Main generator ───────────────────────────────────────────────────────────
 
 trait ValidatedBuilderGenerator[T] {
   type Builder
   def apply(): Builder
+}
+
+trait NoAllowBuilderInstance[T] extends ValidatedBuilderGenerator[T]
+trait AllowBuilderInstance[T] extends ValidatedBuilderGenerator[T]
+trait NoAllowErrorType[T] {
+  type E
+}
+trait AllowErrorType[T] {
+  type E
+}
+trait AllowBuilderType[T] {
+  type Builder
+}
+trait AllowNoTransparentBuilder[T] {
+  type Builder
+  def builder: Builder
+}
+
+object NoAllowBuilderInstance {
+  type Aux[T, B] = NoAllowBuilderInstance[T] { type Builder = B }
+
+  inline given [T]: NoAllowBuilderInstance[T] =
+    ${ ValidatedBuilderGenerator.noAllowBuilderInstanceImpl[T] }
+}
+
+object AllowBuilderInstance {
+  type Aux[T, B] = AllowBuilderInstance[T] { type Builder = B }
+
+  inline given [T]: AllowBuilderInstance[T] =
+    ${ ValidatedBuilderGenerator.allowBuilderInstanceImpl[T] }
+}
+
+object NoAllowErrorType {
+  type Aux[T, E0] = NoAllowErrorType[T] { type E = E0 }
+
+  inline given [T]: NoAllowErrorType[T] =
+    ${ ValidatedBuilderGenerator.noAllowErrorTypeImpl[T] }
+}
+
+object AllowErrorType {
+  type Aux[T, E0] = AllowErrorType[T] { type E = E0 }
+
+  inline given [T]: AllowErrorType[T] =
+    ${ ValidatedBuilderGenerator.allowErrorTypeImpl[T] }
+}
+
+object AllowBuilderType {
+  type Aux[T, B] = AllowBuilderType[T] { type Builder = B }
+
+  inline given [T]: AllowBuilderType[T] =
+    ${ ValidatedBuilderGenerator.allowBuilderTypeImpl[T] }
+}
+
+object AllowNoTransparentBuilder {
+  type Aux[T, B] = AllowNoTransparentBuilder[T] { type Builder = B }
+
+  inline given [T]: AllowNoTransparentBuilder[T] =
+    ${ ValidatedBuilderGenerator.allowNoTransparentBuilderImpl[T] }
 }
 
 object ValidatedBuilderGenerator {
@@ -145,8 +136,11 @@ object ValidatedBuilderGenerator {
       case h *: t =>
         NamedTuple[
           Tuple1[Tuple.Head[NamedTuple.Names[R]]],
-          Tuple1[h => ValidatedBuilderSelectable[T, E,
-            NamedTuple[Tuple.Tail[NamedTuple.Names[R]], t]]]
+          Tuple1[h => BuilderFields[
+            NamedTuple[Tuple.Tail[NamedTuple.Names[R]], t],
+            T,
+            E
+          ]]
         ]
     }
 
@@ -164,6 +158,9 @@ object ValidatedBuilderGenerator {
 
   type ValidatedBuilder[T, E] = ValidatedBuilderFor[
     Tuple.Head[Split[Tup[T], 1]], Tuple.Last[Split[Tup[T], 1]], T, E]
+
+  type BuilderStep[K <: String & Singleton, In, Out] =
+    NamedTuple[Tuple1[K], Tuple1[In => Out]]
 
   // ─── Public entry points ──────────────────────────────────────────────────────
 
@@ -183,19 +180,38 @@ object ValidatedBuilderGenerator {
   inline def derivedAllow[T](customPrefix: Option[String]): ValidatedBuilderGenerator[T] =
     ${ derivedImplAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
 
-  /** Returns `ValidatedBuilderSelectable[T, EU, R]` — a concrete class, so the transparent
-   *  inline exposes it without any recursive match-type expansion at the call site. */
   transparent inline def builder[T]        = ${ builderImplNoAllow[T] }
+  transparent inline def builderTyped[T]   = ${ builderImplNoAllow[T] }
+  def builderTypedNoTransparent[T](using errorType: NoAllowErrorType[T], instance: NoAllowBuilderInstance[T]): ValidatedBuilder[T, errorType.E] =
+    instance.asInstanceOf[NoAllowBuilderInstance.Aux[T, ValidatedBuilder[T, errorType.E]]].apply()
+  def builderTypedStrict[T, B](using instance: NoAllowBuilderInstance.Aux[T, B]): B =
+    instance.apply()
   transparent inline def builder[T](pathConfig: ValidationPathConfig) =
     ${ builderImplNoAllowWithPath[T]('pathConfig) }
   transparent inline def builder[T](customPrefix: Option[String]) =
     ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderNoAllow[T] = ${ builderImplNoAllow[T] }
+  transparent inline def builderNoAllowTyped[T] = ${ builderImplNoAllow[T] }
+  def builderNoAllowTypedStrict[T, B](using instance: NoAllowBuilderInstance.Aux[T, B]): B =
+    instance.apply()
   transparent inline def builderNoAllow[T](pathConfig: ValidationPathConfig) =
     ${ builderImplNoAllowWithPath[T]('pathConfig) }
   transparent inline def builderNoAllow[T](customPrefix: Option[String]) =
     ${ builderImplNoAllowWithPath[T]('{ ValidationPathConfig(customPrefix = customPrefix) }) }
   transparent inline def builderAllow[T]   = ${ builderImplAllow[T] }
+  transparent inline def builderAllowTyped[T] = ${ builderImplAllow[T] }
+  inline def builderAllowTypedNoTransparentUnion[T](using noTransparent: AllowNoTransparentBuilder[T]): noTransparent.Builder =
+    noTransparent.builder
+  def withBuilderAllowTypedNoTransparent[T, R](using noTransparent: AllowNoTransparentBuilder[T])(f: noTransparent.Builder => R): R =
+    f(noTransparent.builder)
+  def withBuilderAllowTypedNoTransparentDependent[T, R](using noTransparent: AllowNoTransparentBuilder[T])(f: (n: AllowNoTransparentBuilder[T]) ?=> n.Builder => R): R =
+    f(using noTransparent)(noTransparent.builder)
+  def builderAllowTypedNoTransparent[T](using errorType: AllowErrorType[T], instance: AllowBuilderInstance[T]): ValidatedBuilder[T, errorType.E] =
+    instance.asInstanceOf[AllowBuilderInstance.Aux[T, ValidatedBuilder[T, errorType.E]]].apply()
+  def builderAllowTypedNoTransparentUnion[T](builderType: AllowBuilderType[T])(using instance: AllowBuilderInstance[T]): builderType.Builder =
+    instance.asInstanceOf[AllowBuilderInstance.Aux[T, builderType.Builder]].apply()
+  def builderAllowTypedStrict[T, B](using instance: AllowBuilderInstance.Aux[T, B]): B =
+    instance.apply()
   transparent inline def builderAllow[T](pathConfig: ValidationPathConfig) =
     ${ builderImplAllowWithPath[T]('pathConfig) }
   transparent inline def builderAllow[T](customPrefix: Option[String]) =
@@ -212,17 +228,118 @@ object ValidatedBuilderGenerator {
   def derivedImplNoAllowWithPath[T: Type](pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] =
     derivedImpl[T](allowUnion = false, withPath = true, pathConfig)
 
+  def noAllowBuilderInstanceImpl[T: Type](using Quotes): Expr[NoAllowBuilderInstance[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = false)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = false, withPath = false, '{ ValidationPathConfig() })
+    tpe.asType match {
+      case '[t] =>
+        sel.asTerm.tpe.asType match {
+          case '[b] =>
+            '{ new NoAllowBuilderInstance[t] {
+                 type Builder = b
+                 def apply(): Builder = $sel.asInstanceOf[Builder]
+               }
+            }.asExprOf[NoAllowBuilderInstance[T]]
+          case _ => report.errorAndAbort("Cannot match Builder type")
+        }
+      case _ => report.errorAndAbort("Cannot match T")
+    }
+  }
+
+  def noAllowErrorTypeImpl[T: Type](using Quotes): Expr[NoAllowErrorType[T]] = {
+    import quotes.reflect.*
+    val (_, _, _, euRepr) = analyse[T](allowUnion = false)
+    euRepr.asType match {
+      case '[e] =>
+        '{
+          new NoAllowErrorType[T] {
+            type E = e
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match error type E")
+    }
+  }
+
+  def allowErrorTypeImpl[T: Type](using Quotes): Expr[AllowErrorType[T]] = {
+    import quotes.reflect.*
+    val (_, _, _, euRepr) = analyse[T](allowUnion = true)
+    euRepr.asType match {
+      case '[e] =>
+        '{
+          new AllowErrorType[T] {
+            type E = e
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match error type E")
+    }
+  }
+
+  def allowBuilderTypeImpl[T: Type](using Quotes): Expr[AllowBuilderType[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = true)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+    sel.asTerm.tpe.asType match {
+      case '[b] =>
+        '{
+          new AllowBuilderType[T] {
+            type Builder = b
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match allow builder type")
+    }
+  }
+
+  def allowNoTransparentBuilderImpl[T: Type](using Quotes): Expr[AllowNoTransparentBuilder[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = true)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+    sel.asTerm.tpe.asType match {
+      case '[b] =>
+        '{
+          new AllowNoTransparentBuilder[T] {
+            type Builder = b
+            def builder: Builder = $sel.asInstanceOf[Builder]
+          }
+        }
+      case _ => report.errorAndAbort("Cannot match allow no-transparent builder type")
+    }
+  }
+
+  def allowBuilderInstanceImpl[T: Type](using Quotes): Expr[AllowBuilderInstance[T]] = {
+    import quotes.reflect.*
+    val (tpe, sym, infos, euRepr) = analyse[T](allowUnion = true)
+    val sel = buildSel(euRepr, tpe, sym, infos, allowUnion = true, withPath = false, '{ ValidationPathConfig() })
+    tpe.asType match {
+      case '[t] =>
+        sel.asTerm.tpe.asType match {
+          case '[b] =>
+            '{ new AllowBuilderInstance[t] {
+                 type Builder = b
+                 def apply(): Builder = $sel.asInstanceOf[Builder]
+               }
+            }.asExprOf[AllowBuilderInstance[T]]
+          case _ => report.errorAndAbort("Cannot match Builder type")
+        }
+      case _ => report.errorAndAbort("Cannot match T")
+    }
+  }
+
   def derivedImpl[T: Type](allowUnion: Boolean, withPath: Boolean, pathConfig: Expr[ValidationPathConfig])(using Quotes): Expr[ValidatedBuilderGenerator[T]] = {
     import quotes.reflect.*
     val (tpe, sym, infos, euRepr) = analyse[T](allowUnion)
     val sel = buildSel(euRepr, tpe, sym, infos, allowUnion, withPath, pathConfig)
     tpe.asType match {
       case '[t] =>
-        '{ new ValidatedBuilderGenerator[t] {
-             type Builder = AnyNamedTuple
-             def apply(): Builder = $sel.asInstanceOf[Builder]
-           }
-        }.asExprOf[ValidatedBuilderGenerator[T]]
+        sel.asTerm.tpe.asType match {
+          case '[b] =>
+            '{ new ValidatedBuilderGenerator[t] {
+                 type Builder = b
+                 def apply(): Builder = $sel.asInstanceOf[Builder]
+               }
+            }.asExprOf[ValidatedBuilderGenerator[T]]
+          case _ => report.errorAndAbort("Cannot match Builder type")
+        }
       case _ => report.errorAndAbort("Cannot match T")
     }
   }
@@ -295,17 +412,10 @@ object ValidatedBuilderGenerator {
     (tpe, sym, infos, computeUnifiedErrorType(infos))
   }
 
-  // ─── Core: build the outermost ValidatedBuilderSelectable ────────────────────
+  // ─── Core: build the outermost named-tuple chain ─────────────────────────────
 
   /**
-   * Generates:
-   *   new ValidatedBuilderSelectable[T, EU, R](
-   *     new ValidatedBuilderChain[T](validators, combine, n, emptyArray).tuple1AtLevel(0)
-   *   )
-   *
-   * `validators` and `combine` are quoted expressions computed at macro time.
-   * `ValidatedBuilderChain` is a top-level class, so LambdaLift can always reference it.
-   * No Term-level Lambda or TypeRepr references appear inside generated lambdas.
+   * Generates a nested tuple chain typed as a named tuple builder shape.
    */
   private def buildSel(using Quotes)(
     euRepr:     quotes.reflect.TypeRepr,
@@ -330,7 +440,6 @@ object ValidatedBuilderGenerator {
     val names      = infos.map(_.fieldName)
     val primTypes  = infos.map(computePrimType(_, allowUnion))
     val fieldTypes = infos.map(fieldTypeOf)
-    val completionDefaults = fieldTypes.map(defaultCompletionValue)
     val normalizedErrorRepr =
       if (withPath && hasValidatedFields) computeUnifiedErrorType(infos, normalizePathAware = true)
       else euRepr
@@ -374,11 +483,7 @@ object ValidatedBuilderGenerator {
         }
       case (base, _) => base
     }
-    val rType      = ntRepr(names, expandedPrimTypes)
-    val selTC      = TypeRepr.of[ValidatedBuilderSelectable[Any, Any, AnyNamedTuple]].typeSymbol.typeRef
-    val selType    = selTC.appliedTo(List(targetTpe, outputErrorRepr, rType))
-    val selCtor    = TypeRepr.of[ValidatedBuilderSelectable[Any, Any, AnyNamedTuple]]
-      .typeSymbol.primaryConstructor
+    val builderTypeRepr = buildBuilderTypeRepr(names, expandedPrimTypes, targetTpe, outputErrorRepr)
 
     // Build per-field validator: Any => ZValidation[Nothing, Any, Any]
     val validatorExprs: List[Expr[Any => Any]] = infos.map { info =>
@@ -442,38 +547,13 @@ object ValidatedBuilderGenerator {
 
     // Build the combine function: Array[ZValidation[Nothing,Any,Any]] => ZValidation[Nothing,Any,T]
     val combineExpr: Expr[Array[Any] => Any] = buildCombine(outputErrorRepr, targetTpe, targetSym, fieldTypes)
-    val completionDefaultsExprs: List[Expr[Option[Any]]] = completionDefaults.map {
-      case Some(v) => '{ Some($v) }
-      case None => '{ None }
-    }
 
-    // Build the chain expression — purely quoted, no Term-level Lambda
-    val nExpr = Expr(n)
     val validatorsExpr: Expr[Array[Any => Any]] = '{ ${ Expr.ofList(validatorExprs) }.toArray }
-    val defaultsExpr: Expr[Array[Option[Any]]] = '{ ${ Expr.ofList(completionDefaultsExprs) }.toArray }
 
-    outputErrorRepr.asType match {
-      case '[eu] => targetTpe.asType match {
-        case '[t] =>
-          val selectableExpr: Expr[ValidatedBuilderSelectable[t, eu, AnyNamedTuple]] = '{
-            val rootChain = new ValidatedBuilderChain[t](
-              $validatorsExpr,
-              $combineExpr,
-              $nExpr,
-              new Array[Any](0),
-              $defaultsExpr
-            )
-            new ValidatedBuilderSelectable[t, eu, AnyNamedTuple](
-              rootChain.tuple1AtLevel[AnyNamedTuple](0).asInstanceOf[Tuple1[Any => Any]],
-              () => rootChain.completeFrom(0)
-            )
-          }
-          // Wrap in ValidatedBuilderSelectable with precise compile-time type
-          Typed(selectableExpr.asTerm, Inferred(selType)).asExpr
-        case _ => report.errorAndAbort("t")
-      }
-      case _ => report.errorAndAbort("eu")
+    val namedTupleBuilderExpr: Expr[AnyNamedTuple] = '{
+      Tuple1(buildNamedTupleChain($validatorsExpr, $combineExpr, 0, new Array[Any](0))).asInstanceOf[AnyNamedTuple]
     }
+    Typed(namedTupleBuilderExpr.asTerm, Inferred(builderTypeRepr)).asExpr
   }
 
   // ─── Per-field validator ─────────────────────────────────────────────────────
@@ -613,7 +693,6 @@ object ValidatedBuilderGenerator {
                 '{ (elem: Any) =>
                   try {
                     val e = elem.asInstanceOf[elemTy]
-                    // Use Selectable to extract field by name at runtime
                     val sel = e.asInstanceOf[scala.reflect.Selectable]
                     val value = sel.selectDynamic(${ Expr(nf) })
                     Option(value.toString)
@@ -640,7 +719,6 @@ object ValidatedBuilderGenerator {
                 '{ (elem: Any) =>
                   try {
                     val e = elem.asInstanceOf[valTy]
-                    // Use Selectable to extract field by name at runtime
                     val sel = e.asInstanceOf[scala.reflect.Selectable]
                     val value = sel.selectDynamic(${ Expr(nf) })
                     Option(value.toString)
@@ -1189,6 +1267,63 @@ object ValidatedBuilderGenerator {
     val vs = types.foldRight[TypeRepr](TypeRepr.of[EmptyTuple])((t, acc) =>
       AppliedType(consTC, List(t, acc)))
     AppliedType(ntTC, List(ns, vs))
+  }
+
+  private def buildBuilderTypeRepr(using Quotes)(
+    names: List[String],
+    inputTypes: List[quotes.reflect.TypeRepr],
+    targetTpe: quotes.reflect.TypeRepr,
+    errorTpe: quotes.reflect.TypeRepr
+  ): quotes.reflect.TypeRepr = {
+    import quotes.reflect.*
+    if (names.isEmpty || inputTypes.isEmpty || names.length != inputTypes.length) {
+      report.errorAndAbort("Cannot build builder type: invalid named field inputs")
+    }
+
+    val fn1TC: TypeRepr = TypeRepr.of[Any => Any] match {
+      case AppliedType(tc, _) => tc
+      case other => report.errorAndAbort(s"Cannot extract Function1 type constructor from ${other.show}")
+    }
+    val zvTC: TypeRepr = TypeRepr.of[ZValidation[Nothing, Any, Any]] match {
+      case AppliedType(tc, _) => tc
+      case other => report.errorAndAbort(s"Cannot extract ZValidation type constructor from ${other.show}")
+    }
+
+    def loop(remNames: List[String], remInputs: List[TypeRepr]): TypeRepr = {
+      remNames match {
+        case name :: Nil =>
+          val input = remInputs.head
+          val resultType = AppliedType(zvTC, List(TypeRepr.of[Nothing], errorTpe, targetTpe))
+          val fnType = AppliedType(fn1TC, List(input, resultType))
+          ntRepr(List(name), List(fnType))
+        case name :: tailNames =>
+          val input = remInputs.head
+          val tailType = loop(tailNames, remInputs.tail)
+          val fnType = AppliedType(fn1TC, List(input, tailType))
+          ntRepr(List(name), List(fnType))
+        case Nil =>
+          report.errorAndAbort("Cannot build builder type from empty fields")
+      }
+    }
+
+    loop(names, inputTypes)
+  }
+
+  private[api] def buildNamedTupleChain(
+    validators: Array[Any => Any],
+    combine: Array[Any] => Any,
+    idx: Int,
+    collected: Array[Any]
+  ): Any => Any = {
+    (rawParam: Any) => {
+      val zv = validators(idx)(rawParam)
+      val newCollected = collected :+ zv
+      if (idx == validators.length - 1) {
+        combine(newCollected)
+      } else {
+        Tuple1(buildNamedTupleChain(validators, combine, idx + 1, newCollected))
+      }
+    }
   }
 
   @deprecated("Use macro-generated builder", "now")

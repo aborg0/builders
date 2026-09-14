@@ -3,7 +3,6 @@ package api
 import models.*
 import utest.*
 import zio.prelude.ZValidation
-import scala.compiletime.testing.typeCheckErrors
 
 import java.time.LocalDate
 
@@ -101,17 +100,10 @@ object ValidationErrorTypeTests extends TestSuite {
       val _ = plainCheck
     }
 
-    test("TrailingOptionalDummy completion type") {
+    test("TrailingOptionalDummy explicit optional type") {
       val completeCheck: ZValidation[Nothing, Nothing, TrailingOptionalDummy] =
-        TrailingOptionalDummy.validator.name("x").i(1).date(null).!
+        TrailingOptionalDummy.validator.name("x").i(1).date(null).result(None)
       val _ = completeCheck
-    }
-
-    test("Completion is rejected when required fields remain") {
-      val errors = typeCheckErrors(
-        "import models.*\nTrailingOptionalDummy.validator.name(\"x\").i(1).!"
-      )
-      assert(errors.nonEmpty)
     }
 
   }

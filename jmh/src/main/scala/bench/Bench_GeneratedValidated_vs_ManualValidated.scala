@@ -1,6 +1,7 @@
 package bench
 
 import java.util.concurrent.TimeUnit
+import benchmodel.BenchSmallValidated
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.Blackhole
 import zio.prelude.ZValidation
@@ -13,7 +14,7 @@ import playground._
 class Bench_GeneratedValidated_vs_ManualValidated {
 
   // Use local small validated model to avoid SequenceNumber subtype complications
-  val gen = ValidatedBuilderGenerator.builderAllow[SmallValidated]
+  val gen = ValidatedBuilderGenerator.builderAllow[BenchSmallValidated]
   val manual = ManualBuilders.ManualSmallValidated.builder()
 
   // Success-case inputs

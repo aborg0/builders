@@ -1,6 +1,7 @@
 package bench
 
 import java.util.concurrent.TimeUnit
+import benchmodel.BenchSmallValidated
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.Blackhole
 
@@ -16,7 +17,7 @@ class Bench_SimpleBuilder_vs_Validated {
   val simple = SimpleSmallBuilder()
 
   // Validated builder for SmallValidated
-  val validated = ValidatedBuilderGenerator.builderAllow[SmallValidated]
+  val validated = ValidatedBuilderGenerator.builderAllow[BenchSmallValidated]
 
   @Benchmark
   def simple_complete(blackhole: Blackhole): Unit = {
