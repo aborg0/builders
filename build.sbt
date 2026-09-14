@@ -2,8 +2,8 @@ import _root_.scalafix.sbt.ScalafixPlugin.autoImport._
 
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
-ThisBuild / scalaVersion := "3.7.4"
-ThisBuild / crossScalaVersions := Seq("3.7.4", "3.8.3")
+ThisBuild / scalaVersion := "3.9.0"
+ThisBuild / crossScalaVersions := Seq("3.8.4", "3.9.0")
 
 // A new simple_builders subproject holds the sources previously at sthe root `src` directory.
 lazy val simpleBuilders = (project in file("simple_builders"))
@@ -68,7 +68,7 @@ lazy val removeFix = project
     libraryDependencies ++= Seq(
       "ch.epfl.scala" %% "scalafix-core" % "0.14.4",
       "ch.epfl.scala" % "scalafix-testkit_2.13.17" % "0.14.4" % Test,
-      compilerPlugin("org.scalameta" % "semanticdb-scalac_2.13.17" % "4.17.0" % Test),
+      compilerPlugin("org.scalameta" % "semanticdb-scalac_2.13.17" % "4.17.0"),
       "com.lihaoyi" %% "utest" % "0.9.5" % Test,
       "dev.zio" %% "zio" % "2.1.26" % Test,
       "dev.zio" %% "zio-prelude" % "1.0.0-RC46" % Test
@@ -90,7 +90,7 @@ lazy val jmh = project
   .settings(
     name := "builders-jmh",
     // ensure same Scala version; ThisBuild already sets it but be explicit
-    scalaVersion := "3.7.4",
+    scalaVersion := "3.9.0",
     // Fork JVM for stable JMH runs
     Compile / fork := true,
     // Reasonable JVM options for benchmarking
@@ -105,7 +105,7 @@ lazy val example = project
   .settings(
     name := "builders-example",
     publish / skip := true,
-    scalaVersion := "3.7.4",
+    scalaVersion := "3.9.0",
     libraryDependencies ++= Seq(
       "com.lihaoyi" %% "utest" % "0.9.5" % Test,
       "dev.zio" %% "zio-prelude" % "1.0.0-RC47",
